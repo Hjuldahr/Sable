@@ -1,0 +1,5 @@
+.env
+*.db
+*.gguf
+__pycache__/*
+secrets/*
