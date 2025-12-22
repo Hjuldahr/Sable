@@ -4,26 +4,31 @@ from typing import Any
 import aiosqlite
 
 class DAO:
-    def __init__(self, db_path=r".\data\history-v1-1.db"):
+    def __init__(self, db_path=r".\data\database.db"):
         self.db_path = db_path
         self.conn: aiosqlite.Connection = None
 
     async def init(self):
         self.conn = await aiosqlite.connect(self.db_path)
-        await self.conn.execute("""
+        await self.conn.execute(r"""
             CREATE TABLE IF NOT EXISTS Persona (
                 id INTEGER PRIMARY KEY CHECK(id = 1),  -- ensures singleton
-                user_id INTEGER DEFAULT 1452493514050113781, -- discord id
-                AI_name TEXT DEFAULT 'Sable',
-                personality_traits Text,               -- e.g., JSON {"friendly":0.8,"humorous":0.5}
-                tone_style TEXT,                        -- e.g., "playful"
-                principles Text,                        -- e.g., JSON ["honesty","empathetic"]
+                user_id INTEGER, -- discord id
+                AI_name TEXT
+                personality_traits TEXT DEFAULT '{}',  -- e.g., JSON {"friendly":0.8,"humorous":0.5}
+                tone_style TEXT,                       -- e.g., "playful"
+                principles TEXT DEFAULT '[]',          -- e.g., JSON ["honesty","empathetic"]
                 default_response_length INTEGER DEFAULT 255,
                 created_at INTEGER DEFAULT (strftime('%s','now')),  -- UNIX epoch
                 updated_at INTEGER DEFAULT (strftime('%s','now'))
             );
         """)
         await self.conn.execute("""
+            INSERT INTO users (id, user_id, AI_name, tone_style, default_response_length) 
+            VALUES (1, 1452493514050113781, 'Sable', 'playful', 255)
+            ON CONFLICT(id) DO NOTHING;
+        """)
+        await self.conn.execute(r"""
             CREATE TABLE IF NOT EXISTS UserMemory (
                 user_id INTEGER PRIMARY KEY,             -- unique per user
                 user_name TEXT,                          -- current Discord/username
@@ -34,7 +39,7 @@ class DAO:
                 last_seen_at INTEGER DEFAULT (strftime('%s','now')) -- UNIX epoch
             );
         """)
-        await self.conn.execute("""
+        await self.conn.execute(r"""
             CREATE TABLE IF NOT EXISTS ConversationHistory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,                         -- links to UserMemory
@@ -76,7 +81,12 @@ class DAO:
         
         await self.conn.execute(
             "UPDATE Persona SET personality_traits = ?, tone_style = ?, principles = ?, updated_at = ? WHERE id = 1;",
-            (personality_traits_json, tone_style, principles_json, updated_at)
+            (
+                personality_traits_json, 
+                tone_style, 
+                principles_json, 
+                updated_at
+            )
         )
         await self.conn.commit()
         
@@ -118,7 +128,7 @@ class DAO:
 
         return user_memories
     
-    async def save_user_memory(self, user_memory: dict):
+    async def save_user_memory(self, user_memory: dict[str, Any]) -> None:
         interests_json = json.dumps(user_memory.get('interests', []))
         learned_facts_json = json.dumps(user_memory.get('learned_facts', {}))
         last_seen = int(user_memory.get('last_seen_at', datetime.now(timezone.utc).timestamp()))
@@ -154,7 +164,22 @@ class DAO:
         )
         await self.conn.commit()
         
-    
+    async def save_conversation_history(self):
+        """
+            CREATE TABLE IF NOT EXISTS ConversationHistory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,                         -- links to UserMemory
+                channel_id INTEGER,                       -- Discord channel or conversation ID
+                message_id INTEGER,                       -- Discord message ID
+                timestamp INTEGER,                        -- UNIX epoch
+                raw_text TEXT,
+                token_count INTEGER,
+                role_id INTEGER                           -- "user" or "ai"
+            );
+        """
+        await self.conn.execute(
+            
+        )
 
     async def close(self):
         if self.conn:
