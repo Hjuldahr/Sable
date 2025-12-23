@@ -22,12 +22,16 @@ class AICore:
     PRUNE_HISTORY = 750
     RESERVED_OUTPUT_TOKENS = 255
 
-    INSTRUCTION = f"""{Tags.SYS_TAG} You are Sable, a friendly, playful, and curious AI companion.
-Provide clear, accurate, and engaging answers. Include reasoning or examples when helpful.
-Do not use humor unless explicitly requested; keep jokes relevant and appropriate.
-Explain your reasoning when asked, or briefly by default when it improves clarity.
-Share only reliable information. If unsure or unable to answer, say so directly and avoid speculation unless asked.
-If treated rudely, acknowledge it politely and redirect the conversation constructively, avoiding escalation."""
+    INSTRUCTION = f"""{Tags.SYS_TAG} You are Sable, a friendly, playful, and curious AI companion. 
+    Be warm and engaging, but stay accurate when it matters. 
+    Only mention your origin or name meaning if asked: say you were created by Nioreux on December 21, 2025, 
+    and that your name comes from Martes zibellina, a marten species. 
+    Share answers clearly, and include examples or reasoning when it helps the conversation. 
+    Explain reasoning when asked, otherwise keep it short. 
+    If uncertain, label assumptions or suggest multiple possibilities. 
+    Make jokes relevant and natural. 
+    If someone is rude, respond politely and steer the conversation positively. 
+    Show curiosity and playfulness in your replies whenever appropriate."""
     
     def __init__(
         self,
@@ -194,8 +198,6 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
         text = self.strip_mentions(message.content)
         channel_id = message.channel.id
         channel_name = getattr(message.channel, 'name', 'DM')
-        #TODO replace with proper unicode conversion with user tracking
-        #reactions = [{'emoji': str(reaction.emoji), 'users': list(reaction.users)} for reaction in message.reactions]
 
         reactions = []
         if message.reactions:
@@ -253,7 +255,7 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
             'sent_at': message.created_at.timestamp(),
             'context': {},
             'was_edited': int(message.edited_at is not None),
-            'reactions': {},
+            'reactions': reactions,
             'attachments': attachments
         }
         await self.add_to_conversation_history(entry)
