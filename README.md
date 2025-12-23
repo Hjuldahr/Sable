@@ -1,50 +1,77 @@
 # Sable
-A Dynamic Discord Chat Agent
+_A Dynamic Discord Chat Agent_
+
+Sable is a for-fun Discord chat agent powered by a locally hosted, quantized LLM.  
+It is designed for experimentation, learning, and personal server use.
 
 ## Tech Stack
-- Async SQLite (aiosqlite)
-- Discord API (discord)
-- Local Quantized Mistral LLM (mistral-7b-instruct-v0.1.Q4_K_M.gguf)
-- Python3 (python 3.12.*)
+- **Python**: 3.12.\*
+- **Database**: Async SQLite (`aiosqlite`)
+- **Discord API**: `discord.py`
+- **LLM**: Local Quantized Mistral  
+    (`mistral-7b-instruct-v0.1.Q4_K_M.gguf`)
+- **Inference**: `llama-cpp-python`
 
 ## Installation
-### Discord Bot
-1. Go to [Discord Developers](https://discord.com/developers/applications)\
-2. Use *New Application*, or select the application if it already exists.\
-3. Write down the *Client ID* under *OAuth2*.\
-4. Write down the bot *Token* under *Bot*. (Use 'Reset Token' if you can't see it)
+### 1. Discord Bot Setup
+1.  Go to **Discord Developers**  
+    [https://discord.com/developers/applications](https://discord.com/developers/applications)
+2.  Create a **New Application** (or select an existing one).
+3.  Under **OAuth2**, copy the **Client ID**.
+4.  Under **Bot**, copy the **Bot Token**  
+    (use **Reset Token** if it’s hidden).
 
-### .env File
-Create a *.env* file under the project's root directory\
-```
-BOT_ID=Insert Client ID Here
-DISCORD_BOT_TOKEN=Insert Bot Token Here
-```
-The resulting .env should match the above format with the values substituted as indicated.
+>⚠️ **Do not share your bot token.**
+### 2. Environment Variables (.env)
+***
+Create a `.env` file in the project root:
 
-### Python Environment
-Download then install [Python 3.12.*](https://www.python.org/downloads/release/python-31210/)\
-Open your preferred developement terminal then execute:\
-`pip install aiosqlite`\
-`pip install llama-cpp-python`\
-`pip install discord.py`\
-or\
+`BOT_ID=Insert_Client_ID_Here DISCORD_BOT_TOKEN=Insert_Bot_Token_Here`
+
+Ensure the variable names match exactly.
+### 3. Python Environment
+***
+Download and install **Python 3.12.\***  
+[https://www.python.org/downloads/release/python-31210/](https://www.python.org/downloads/release/python-31210/)
+
+From your development terminal:
+
+`pip install aiosqlite pip install llama-cpp-python pip install discord.py`
+
+Or install everything at once:
+
 `pip install -r requirements.txt`
+### 4. Language Model
+***
+Download the Mistral model:
 
-### LLM
-Download the [Mistral LLM](https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF/resolve/main/mistral-7b-instruct-v0.1.Q4_K_M.gguf) then move it to [model\\...](model\.gitkeep)
+- **Model**: Mistral 7B Instruct (GGUF, Q4\_K\_M)
+    
+- **Source**: [https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF/resolve/main/mistral-7b-instruct-v0.1.Q4\_K\_M.gguf](https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF/resolve/main/mistral-7b-instruct-v0.1.Q4_K_M.gguf)
+    
+Move the file into:
 
-### Initialization
-Run App.py\
-_This will generate data\database.db file if it does not existt_
+`model/`
+
+(The directory is tracked via `.gitkeep`.)
+### 5. Initialization
+***
+Run the application:
+
+`python App.py`
+
+On first launch, this will automatically create:
+
+`data/database.db`
+
+if it does not already exist.
 
 ## Disclaimer & Usage
-This project is for personal, educational, or experimental use only. It is not intended for commercial usage or monetization.
-
-If you intend to adapt or redistribute this project, please fork the repository or credit the original creator in code comments and documentation.
-
-This project is currently under developement and is without any warranty. Use at own risk.
-
-Users are responsible for ensuring their use of this project complies with Discord’s ToS.
-
-This project may include third-party APIs; please follow their respective licenses.
+- This project is intended for **personal, educational, or experimental use only**.\ 
+It is **not designed for commercial use or monetization**.
+- If you adapt or redistribute this project, please **fork the repository** or provide **clear creator attribution** in documentation and/or code comments.
+- This project is **under active development** and is provided **“as-is”**, without warranty of any kind.  
+**Use at your own risk.**
+- You are responsible for ensuring your usage complies with **Discord’s Terms of Service** and Community Guidelines.
+- This project may include **third-party libraries or APIs**.\  
+Please review and comply with their respective licenses.
