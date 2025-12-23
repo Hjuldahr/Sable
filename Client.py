@@ -1,17 +1,17 @@
-import discord
 import os
-from dotenv import load_dotenv
 import signal
-from SABLE.sable_ai_v1_1 import Sable # your updated EOS class
+import discord
+from dotenv import load_dotenv
 
-load_dotenv(r'.\EOS\.env')
+from components.ai.Core import Core
 
-# --- Discord client setup ---
+load_dotenv(r'.\SABLE\.env')
+
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-sable = Sable('Sable', 1452493514050113781)  # if EOS has async init, we call it below
+sable = Core('Sable', 1452493514050113781)
 
 # --- Async startup task ---
 async def startup():
@@ -48,6 +48,8 @@ async def on_message(message: discord.Message):
     if not text:
         return
 
+    reactions = message.reactions
+
     # Check if the bot was mentioned
     is_mentioned = client.user in message.mentions
     if is_mentioned:
@@ -80,23 +82,9 @@ async def on_message(message: discord.Message):
                 query=text
         )
 
-# --- Run the bot ---
 if __name__ == "__main__":
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")
     if not TOKEN:
         raise RuntimeError("DISCORD_BOT_TOKEN not found in .env")
 
     client.run(TOKEN)
-    
-# Goals by priority
-# Persona
-# 1. persistant personality formation
-# 2. see & add reactions to messages it likes
-# 3. use emotional analysis to dynamic adjust instructions for variable mood and tone
-# Power
-# 4. semantic (vector) analysis for smart context retrieval instead of raw chronology across channels
-# 5. read file attachments (+images) as markdown using markitdown
-# 6. web look up for knowledge base enrichment
-# 7. file generation (provided via ai message attachement)
-# Prestige
-# 8. inviteable to calls with tts and voice recog i/o
