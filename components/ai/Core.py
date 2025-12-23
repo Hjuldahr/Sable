@@ -37,6 +37,14 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
         model_path=r'.\model\mistral-7b-instruct-v0.1.Q4_K_M.gguf',
         n_threads=4,
     ):
+        """
+        Args:
+            discord_client (discord.Client): The client used for connection
+            ai_user_id (int): The Discord Bot ID 
+            ai_user_name (str, optional): The Discord Bot Username. Defaults to 'Sable'.
+            model_path (str, optional): Path to the LLM model file. Defaults to r'.\model\mistral-7b-instruct-v0.1.Q4_K_M.gguf'.
+            n_threads (int, optional): Multithreading Allocation. Defaults to 4.
+        """
         self.discord_client = discord_client
 
         self.ai_user_name = ai_user_name
@@ -79,7 +87,13 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
 
     # ---- Conversation History ----
     async def add_to_conversation_history(self, entry: Dict[str, Any]):
-        """"""
+        """
+        Async conversation history update.\n
+        Automatically truncates memory and persists to db.
+
+        Args:
+            entry (Dict[str, Any]): Entry to be stored
+        """
         async with self.conversation_history_lock:
             self.conversation_history.append(entry)
             if len(self.conversation_history) > self.MAX_HISTORY:
@@ -88,21 +102,35 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
             await self.dao.upsert_conversation_history(entry)
 
     async def clear_conversation_history(self):
+        """Async conversation history mass deletion."""
         async with self.conversation_history_lock:
             self.conversation_history.clear()
-            # Optional: truncate in DB
-            # await self.dao.truncate_conversation_history()  # implement if needed
+            await self.dao.delete_all_conversation_history()
 
     # ---- Formatting / Prompt Building ----
-    def format_line(self, entry: Dict[str, Any]):
+    def format_line(self, entry: Dict[str, Any]) -> str:
+        """
+        Formats entry for prompt injection
+
+        Args:
+            entry (Dict[str, Any]): Conversation entry data
+
+        Returns:
+            str: Formatted prompt entry
+        """
         channel_name = entry.get('channel_name', 'unknown')
         user_name = entry.get('user_name', 'unknown')
         raw_text = entry.get('raw_text', '')
         return f"{Tags.TAGS[entry['role_id']]} [{channel_name}] {user_name}: {raw_text}"
 
     def build_prompt(self) -> str:
-        #TODO add ai mood, conversation subject, etc indicators into instructions
+        """
+        Composes a prompt from history and other metrics to feed into the LLM
 
+        Returns:
+            str: LLM Prompt
+        """
+        #TODO add ai mood, conversation subject, etc indicators into instructions
         temp_history = self.conversation_history[::-1]
         prompt_stack = [Tags.AI_TAG]
         current_token_count = self.reserved_tokens
@@ -120,11 +148,21 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
 
     # ---- LLM Generation ----
     def _generate(self, prompt: str) -> Dict:
-        # TODO dynamic temperature based on mood thresholds
+        """
+        LLM call wrapper\n
+        Llama.call() is natively a blocking operation
 
+        Args:
+            prompt (str): The prompt used for LLM generation
+
+        Returns:
+            Dict: The result produced by the LLM
+        """
+        # TODO dynamic temperature based on mood thresholds
         return self.llm(prompt, max_tokens=256, stream=False)
 
     def extract_from_output(self, output: Dict) -> tuple[str, int]:
+
         response = output['choices'][0]['text']
         # Remove trailing user tags if present
         if Tags.USER_TAG in response:
@@ -132,12 +170,25 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
         token_count = output['usage']['completion_tokens']
         return response, token_count
 
-    def strip_mentions(self, raw_text: str):
+    def strip_mentions(self, raw_text: str) -> str:
+        """Removes Discord mention tags from text
+
+        Args:
+            raw_text (str): Original Discord message
+
+        Returns:
+            str: Cleaned message
+        """
         return raw_text.replace(f'<@!{self.ai_user_id}>', '').replace(f'<@{self.ai_user_id}>', '').strip()
 
     # ---- Discord Interaction ----
     async def listen(self, message: discord.Message):
-        """Process incoming message: update history, user memory, etc."""
+        """
+        Process incoming message: update history, user memory, etc.
+
+        Args:
+            message (discord.Message): Message to be processed
+        """
         user_id = message.author.id
         user_name = message.author.name
         text = self.strip_mentions(message.content)
@@ -208,7 +259,11 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
         await self.add_to_conversation_history(entry)
 
     async def response(self) -> Dict[str, Any]:
-        """Generate a response using persona, user memory, and conversation history."""
+        """Generate a response using persona, user memory, and conversation history.
+
+        Returns:
+            Dict[str, Any]: Response Generated by LLM
+        """
         prompt = self.build_prompt()
         output = await asyncio.get_running_loop().run_in_executor(self.executor, self._generate, prompt)
         response_text, token_count = self.extract_from_output(output)
@@ -231,7 +286,7 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
         await self.add_to_conversation_history(entry)
         return {'response_text': response_text} #Include file creation and more if needed in future
 
-    async def react(self, client: discord.Client, message_id: int):
+    async def react(self, message_id: int):
         """Add reaction to a conversation history entry."""
         # TODO decide if its react worthy based on AI persona
         heuristic = 0 # Replace with a heuristic measure calculated from message
@@ -259,9 +314,19 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
 
     # ---- Token utilities ----
     def token_counter(self, text: str) -> int:
+        """
+        Estimates the number of tokens that a string would consume
+
+        Args:
+            text (str): Text to be tokenized
+
+        Returns:
+            int: Quantity of tokens
+        """
         return len(self.tokenizer.encode(text))
 
     # ---- Cleanup ----
     def close(self):
+        """Terminates the LLM and its utilities"""
         self.executor.shutdown(cancel_futures=True)
         self.llm.close()

@@ -224,6 +224,13 @@ class SQLiteDAO:
             "DELETE FROM ConversationHistory WHERE message_id = ?;", (message_id,)
         )
         await self.conn.commit()
+        
+    async def delete_all_conversation_history(self) -> None:
+        """Delete entirety of conversation history."""
+        await self.conn.execute(
+            "DELETE FROM ConversationHistory;"
+        )
+        await self.conn.commit()
 
     # ---- Cleanup ----
 
