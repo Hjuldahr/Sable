@@ -25,9 +25,10 @@ It is designed for experimentation, learning, and personal server use.
 ### 2. Environment Variables (.env)
 ***
 Create a `.env` file in the project root:
-
-`BOT_ID=Insert_Client_ID_Here DISCORD_BOT_TOKEN=Insert_Bot_Token_Here`
-
+```
+BOT_ID=Insert_Client_ID_Here
+DISCORD_BOT_TOKEN=Insert_Bot_Token_Here
+```
 Ensure the variable names match exactly.
 ### 3. Python Environment
 ***
@@ -36,9 +37,9 @@ Download and install **Python 3.12.\***
 
 From your development terminal:
 
-`pip install aiosqlite`
-`pip install llama-cpp-python`
-`pip install discord.py`
+`pip install aiosqlite`\
+`pip install llama-cpp-python`\
+`pip install discord.py`\
 `pip install dotenv`
 
 Or install everything at once:
@@ -71,11 +72,11 @@ On first launch, this will automatically create:
 if it does not already exist.
 
 ## Disclaimer & Usage
-- This project is intended for **personal, educational, or experimental use only**.\ 
+- This project is intended for **personal, educational, or experimental use only**.
 It is **not designed for commercial use or monetization**.
 - If you adapt or redistribute this project, please **fork the repository** or provide **clear creator attribution** in documentation and/or code comments.
 - This project is **under active development** and is provided **“as-is”**, without warranty of any kind.  
 **Use at your own risk.**
 - You are responsible for ensuring your usage complies with **Discord’s Terms of Service** and Community Guidelines.
-- This project may include **third-party libraries or APIs**.\  
+- This project may include **third-party libraries or APIs**.  
 Please review and comply with their respective licenses.
