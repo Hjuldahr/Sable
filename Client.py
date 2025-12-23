@@ -15,7 +15,7 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 ai_user_id = int(os.getenv("BOT_ID"))
-sable = Core(ai_user_id, 'Sable')
+sable = Core(client, ai_user_id, 'Sable')
 
 # --- Async startup task ---
 async def startup():

@@ -1,9 +1,11 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List
 import discord
 from llama_cpp import Llama
+from markitdown import MarkItDown
 
 from components.ai.Tags import Tags
 from components.db.DAO import DAO  # your updated DAO with reactions field
@@ -22,11 +24,14 @@ Share only reliable information. If unsure or unable to answer, say so directly 
 If treated rudely, acknowledge it politely and redirect the conversation constructively, avoiding escalation."""
     def __init__(
         self,
+        discord_client: discord.Client,
         ai_user_id: int,
         ai_user_name='Sable',
         model_path=r'.\model\mistral-7b-instruct-v0.1.Q4_K_M.gguf',
         n_threads=4,
     ):
+        self.discord_client = discord_client
+        
         self.ai_user_name = ai_user_name
         self.ai_user_id = ai_user_id
 
@@ -37,6 +42,9 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
 
         # DAO for persistence
         self.dao = DAO()
+        
+        # MarkItDown for file interpreting
+        self.md = MarkItDown()
 
         # LLM
         self.llm = Llama(
@@ -126,9 +134,20 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
         text = self.strip_mentions(message.content)
         channel_id = message.channel.id
         channel_name = getattr(message.channel, 'name', 'DM')
+        # TODO replace with proper unicode conversion with user tracking
         #reactions = [{'emoji': str(reaction.emoji), 'users': list(reaction.users)} for reaction in message.reactions]
-        
-        #TODO parse files
+
+        attachments = {}
+        if message.attachments:
+            path = Path(__file__).resolve().parents[2] / 'data' / 'attachments'
+            for attachment in message.attachments:
+                download_path = path / attachment.filename
+                try:
+                    await attachment.save(fp=download_path, use_cached=True)
+                    md_text = self.md.convert_local(download_path)
+                    attachments[attachment.filename] = md_text
+                except discord.HTTPException | discord.NotFound as e: 
+                    print(f'Error Encountered During Attachment Download: {e}')
         
         #TODO Update Persona State
 
@@ -164,7 +183,8 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
             'sent_at': message.created_at.timestamp(),
             'context': {},
             'was_edited': int(message.edited_at is not None),
-            'reactions': {}
+            'reactions': {},
+            'attachments': attachments
         }
         await self.add_to_conversation_history(entry)
 
@@ -192,9 +212,19 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
         await self.add_to_conversation_history(entry)
         return {'response_text': response_text} #Include file creation and more if needed in future
 
-    async def add_react(self, message_id: int, emoji: str, user_id: int):
+    async def react(self, client: discord.Client, message_id: int):
         """Add reaction to a conversation history entry."""
-        # Update in-memory
+        # TODO decide if its react worthy based on AI persona
+        heuristic = 0 # Replace with a heuristic measure calculated from message
+        threshold = 1 # Replace with AI mood (more likely to emote if mood is high)
+        
+        if heuristic <= threshold:
+            # TODO choose emote based on persona 
+            # TODO apply emote to message
+            pass
+        
+        # TODO Update in-memory
+        """
         async with self.conversation_history_lock:
             for entry in self.conversation_history:
                 if entry['message_id'] == message_id:
@@ -206,7 +236,7 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
                     # Persist
                     await self.dao.upsert_conversation_history(entry)
                     break
-        # TODO add reaction to Discord
+        """
 
     # ---- Token utilities ----
     def token_counter(self, text: str) -> int:

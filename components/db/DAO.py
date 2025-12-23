@@ -51,7 +51,8 @@ class DAO:
             token_count INTEGER,
             role_id INTEGER,
             was_edited INTEGER DEFAULT 0,
-            reactions TEXT DEFAULT '{}'
+            reactions TEXT DEFAULT '{}',
+            attachments TEXT DEFAULT '{}'
         );
 
         CREATE INDEX IF NOT EXISTS idx_history_user_id ON ConversationHistory(user_id);
@@ -152,7 +153,7 @@ class DAO:
     async def threshold_select_conversation_history(self, token_count_threshold: int) -> List[dict[str, Any]]:
         """Select recent conversation rows until a cumulative token threshold is reached."""
         cursor = await self.conn.execute("""
-            SELECT message_id, user_id, channel_id, sent_at, raw_text, context, token_count, role_id, was_edited, reactions
+            SELECT message_id, user_id, channel_id, sent_at, raw_text, context, token_count, role_id, was_edited, reactions, attachments
             FROM ConversationHistory
             ORDER BY sent_at DESC
             LIMIT 1000;
@@ -168,6 +169,7 @@ class DAO:
             total_tokens += ch.get('token_count', 0)
             ch['context'] = json.loads(ch.get('context', '{}'))
             ch['reactions'] = json.loads(ch.get('reactions', '{}'))
+            ch['attachments'] = json.loads(ch.get('attachments', '{}'))
             safe_rows.append(ch)
 
         return safe_rows[::-1]  # return oldest -> newest
@@ -176,11 +178,12 @@ class DAO:
         sent_at = int(conversation_history.get('sent_at', datetime.now(timezone.utc).timestamp()))
         context_json = json.dumps(conversation_history.get('context', {}))
         reactions_json = json.dumps(conversation_history.get('reactions', {}))  
+        attachments_json = json.loads(conversation_history.get('attachments', '{}'))
 
         await self.conn.execute("""
             INSERT INTO ConversationHistory 
-                (message_id, user_id, channel_id, sent_at, raw_text, context, token_count, role_id, was_edited, reactions)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (message_id, user_id, channel_id, sent_at, raw_text, context, token_count, role_id, was_edited, reactions, attachments)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(message_id) DO UPDATE SET
                 user_id = excluded.user_id,
                 channel_id = excluded.channel_id,
@@ -190,7 +193,8 @@ class DAO:
                 token_count = excluded.token_count,
                 role_id = excluded.role_id,
                 was_edited = excluded.was_edited,
-                reactions = excluded.reactions;
+                reactions = excluded.reactions,
+                attachments = excluded.attachments;
         """, (
             conversation_history['message_id'],
             conversation_history['user_id'],
@@ -201,7 +205,8 @@ class DAO:
             conversation_history.get('token_count', 0),
             conversation_history['role_id'],
             conversation_history.get('was_edited', 0),
-            reactions_json
+            reactions_json,
+            attachments_json
         ))
         await self.conn.commit()
 

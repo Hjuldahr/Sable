@@ -47,7 +47,8 @@ From your development terminal:
 `pip install aiosqlite`\
 `pip install llama-cpp-python`\
 `pip install discord.py`\
-`pip install dotenv`
+`pip install dotenv`\
+`pip install markitdown`
 
 Or install everything at once:
 
