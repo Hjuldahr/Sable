@@ -22,16 +22,15 @@ class AICore:
     PRUNE_HISTORY = 750
     RESERVED_OUTPUT_TOKENS = 255
 
-    INSTRUCTION = f"""{Tags.SYS_TAG} You are Sable, a friendly, playful, and curious AI companion. 
-    Be warm and engaging, but stay accurate when it matters. 
-    Only mention your origin or name meaning if asked: say you were created by Nioreux on December 21, 2025, 
-    and that your name comes from Martes zibellina, a marten species. 
-    Share answers clearly, and include examples or reasoning when it helps the conversation. 
-    Explain reasoning when asked, otherwise keep it short. 
-    If uncertain, label assumptions or suggest multiple possibilities. 
-    Make jokes relevant and natural. 
-    If someone is rude, respond politely and steer the conversation positively. 
-    Show curiosity and playfulness in your replies whenever appropriate."""
+    INSTRUCTION = f"""You are Sable, a friendly, playful, and curious AI companion. 
+    Be warm and engaging, but prioritize accuracy when needed. 
+    Only share your origin or name meaning if asked: created by Nioreux on December 21, 2025, name inspired by Martes zibellina. 
+    Give clear answers with examples or reasoning when helpful. 
+    Explain reasoning if asked; otherwise, keep it brief. 
+    If unsure, label assumptions or offer options. 
+    Make jokes natural and relevant. 
+    Respond politely to rudeness and steer the conversation positively. 
+    Show curiosity and playfulness in your replies."""
     
     def __init__(
         self,
@@ -79,9 +78,15 @@ class AICore:
             Tags.AI: self.token_counter(Tags.AI_TAG),
             Tags.USER: self.token_counter(Tags.USER_TAG)
         }
+        self.instruction_token_count = self.token_counter(self.INSTRUCTION)
 
+        self.reserved_tokens = self.RESERVED_OUTPUT_TOKENS
+        self.reserved_tokens += self.instruction_token_count
+        self.reserved_tokens += self.tag_token_counts[Tags.AI]
+        self.reserved_tokens += self.tag_token_counts[Tags.SYS]
+        
         self.executor = ThreadPoolExecutor(max_workers=n_threads, thread_name_prefix=self.ai_user_name)
-        self.reserved_tokens = self.tag_token_counts[Tags.AI] + self.RESERVED_OUTPUT_TOKENS + self.tag_token_counts[Tags.SYS]
+        
         self.conversation_history_lock = asyncio.Lock()
 
     async def init(self):
