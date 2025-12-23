@@ -6,7 +6,7 @@ import discord
 from llama_cpp import Llama
 
 from components.ai.Tags import Tags
-from components.db import DAO  # your updated DAO with reactions field
+from components.db.DAO import DAO  # your updated DAO with reactions field
 
 class Core:
     CONTEXT_TOKENS = 32768
@@ -14,13 +14,17 @@ class Core:
     PRUNE_HISTORY = 750
     RESERVED_OUTPUT_TOKENS = 255
 
-    INSTRUCTION = "Respond as the AI persona naturally, concisely, and contextually."
+    INSTRUCTION = f""""{Tags.SYS_TAG} You are Sable, a friendly and curious AI.
+    You answer questions clearly and accurately, can write and explain code, 
+    provide reasoning for your answers, and avoid making up information. 
+    Only respond based on reliable knowledge or indicate when you do not know or do not care.
+    """
 
     def __init__(
         self,
         ai_user_id: int,
         ai_user_name='Sable',
-        model_path=r'..\..\model\mistral-7b-instruct-v0.1.Q4_K_M.gguf',
+        model_path=r'.\model\mistral-7b-instruct-v0.1.Q4_K_M.gguf',
         n_threads=4,
     ):
         self.ai_user_name = ai_user_name
@@ -32,8 +36,7 @@ class Core:
         self.user_memory: Dict[int, Dict[str, Any]] = {}
 
         # DAO for persistence
-        self.dao: DAO = DAO()
-        asyncio.create_task(self.dao.init())
+        self.dao = DAO()
 
         # LLM
         self.llm = Llama(
@@ -50,9 +53,13 @@ class Core:
             Tags.USER: self.token_counter(Tags.USER_TAG)
         }
 
-        self.executor = ThreadPoolExecutor(max_workers=n_threads, thread_name_prefix='sable')
-        self.reserved_tokens = self.RESERVED_OUTPUT_TOKENS
+        self.executor = ThreadPoolExecutor(max_workers=n_threads, thread_name_prefix=self.ai_user_name)
+        self.reserved_tokens = self.tag_token_counts[Tags.AI] + self.RESERVED_OUTPUT_TOKENS + self.tag_token_counts[Tags.SYS]
         self.conversation_history_lock = asyncio.Lock()
+
+    async def init(self):
+        if self.dao:
+            await self.dao.init()
 
     # ---- Conversation History ----
     async def add_to_conversation_history(self, entry: Dict[str, Any]):
@@ -74,24 +81,30 @@ class Core:
         channel_name = entry.get('channel_name', 'unknown')
         user_name = entry.get('user_name', 'unknown')
         raw_text = entry.get('raw_text', '')
-        return f"{Tags.TAGS.get(entry['role_id'], '')} [{channel_name}] {user_name}: {raw_text}"
+        return f"{Tags.TAGS[entry['role_id']]} [{channel_name}] {user_name}: {raw_text}"
 
     def build_prompt(self) -> str:
+        #TODO add ai mood, conversation subject, etc indicators into instructions
+        
         temp_history = self.conversation_history[::-1]
         prompt_stack = [Tags.AI_TAG]
         current_token_count = self.reserved_tokens
 
         for entry in temp_history:
-            if current_token_count + entry.get('token_count', 0) > self.CONTEXT_TOKENS:
+            token_count = self.tag_token_counts[entry['role_id']] + entry.get('token_count', 0)
+            
+            if token_count > self.CONTEXT_TOKENS:
                 break
-            current_token_count += entry.get('token_count', 0)
+            current_token_count += token_count
             prompt_stack.append(self.format_line(entry))
 
-        prompt_stack.append(self.INSTRUCTION)
+        prompt_stack.append(f'{Tags.SYS_TAG} {self.INSTRUCTION}')
         return '\n'.join(reversed(prompt_stack))
 
     # ---- LLM Generation ----
     def _generate(self, prompt: str) -> Dict:
+        # TODO dynamic temperature based on mood thresholds
+        
         return self.llm(prompt, max_tokens=256, stream=False)
 
     def extract_from_output(self, output: Dict) -> tuple[str, int]:
@@ -102,33 +115,41 @@ class Core:
         token_count = output['usage']['completion_tokens']
         return response, token_count
 
+    def strip_mentions(self, raw_text: str):
+        return raw_text.replace(f'<@!{self.ai_user_id}>', '').replace(f'<@{self.ai_user_id}>', '').strip()
+
     # ---- Discord Interaction ----
     async def listen(self, message: discord.Message):
         """Process incoming message: update history, user memory, etc."""
         user_id = message.author.id
         user_name = message.author.name
-        raw_text = message.content
+        text = self.strip_mentions(message.content)
         channel_id = message.channel.id
         channel_name = getattr(message.channel, 'name', 'DM')
+        #reactions = [{'emoji': str(reaction.emoji), 'users': list(reaction.users)} for reaction in message.reactions]
+        
+        #TODO parse files
+        
+        #TODO Update Persona State
 
         # Update UserMemory
         user_memory = self.user_memory.get(user_id, {
             'user_id': user_id,
             'user_name': user_name,
             'nickname': user_name,
-            'interests': [],
-            'learned_facts': {},
-            'interaction_count': 0,
+            'interests': [], #TODO update
+            'learned_facts': {}, #TODO update
+            'interaction_count': 0, 
             'last_seen_at': datetime.now(timezone.utc).timestamp()
         })
-        user_memory['user_name'] = user_name
+        #user_memory['user_name'] = user_name
         user_memory['interaction_count'] += 1
         user_memory['last_seen_at'] = datetime.now(timezone.utc).timestamp()
         self.user_memory[user_id] = user_memory
         await self.dao.upsert_user_memory(user_memory)
 
         # Estimate token count
-        token_count = self.token_counter(raw_text)
+        token_count = self.token_counter(text)
 
         # Update conversation history
         entry = {
@@ -137,7 +158,7 @@ class Core:
             'user_name': user_name,
             'channel_id': channel_id,
             'channel_name': channel_name,
-            'raw_text': raw_text,
+            'raw_text': text,
             'token_count': token_count,
             'role_id': Tags.USER,
             'sent_at': message.created_at.timestamp(),
@@ -169,7 +190,7 @@ class Core:
             'reactions': {}
         }
         await self.add_to_conversation_history(entry)
-        return {'text': response_text, 'token_count': token_count}
+        return {'response_text': response_text} #Include file creation and more if needed in future
 
     async def add_react(self, message_id: int, emoji: str, user_id: int):
         """Add reaction to a conversation history entry."""
@@ -185,6 +206,7 @@ class Core:
                     # Persist
                     await self.dao.upsert_conversation_history(entry)
                     break
+        # TODO add reaction to Discord
 
     # ---- Token utilities ----
     def token_counter(self, text: str) -> int:

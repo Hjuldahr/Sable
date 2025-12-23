@@ -1,22 +1,26 @@
+import asyncio
 import os
 import signal
 import discord
 from dotenv import load_dotenv
+from llama_cpp import Path
 
 from components.ai.Core import Core
 
-load_dotenv(r'.\SABLE\.env')
+path = Path(__file__).resolve().parents[0] / '.env'
+load_dotenv(path)
 
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-sable = Core('Sable', 1452493514050113781)
+ai_user_id = int(os.getenv("BOT_ID"))
+sable = Core(ai_user_id, 'Sable')
 
 # --- Async startup task ---
 async def startup():
     """Initialize async resources before bot starts."""
-    await sable.init()
+    await sable.init() 
     print("Discord Client Starting Up")
 
 # --- Graceful shutdown ---
@@ -26,7 +30,8 @@ async def shutdown():
 def handle_signal(sig, frame):
     """Schedule async shutdown on SIGINT/SIGTERM."""
     sable.close()
-    client.close() 
+    asyncio.get_event_loop().create_task(client.close())
+    exit(0)
 
 # Register signal handlers for Ctrl+C and termination
 for s in (signal.SIGTERM, signal.SIGINT):
@@ -48,7 +53,7 @@ async def on_message(message: discord.Message):
     if not text:
         return
 
-    reactions = message.reactions
+    await sable.listen(message)
 
     # Check if the bot was mentioned
     is_mentioned = client.user in message.mentions
@@ -57,30 +62,9 @@ async def on_message(message: discord.Message):
         mention_text = text.replace(f'<@!{client.user.id}>', '').strip()
         mention_text = mention_text.replace(f'<@{client.user.id}>', '').strip()
 
-        if mention_text:
-            reply = await sable.listen_respond(
-                channel_id=message.channel.id,
-                channel_name=message.channel.name,
-                message_id=message.id,
-                query_timestamp=message.created_at,
-                user_id=message.author.id,
-                user_name=message.author.name,
-                query=mention_text
-            )
-        else:
-            reply = await sable.respond()
-
-        await message.channel.send(reply)
-    else:
-        await sable.listen(
-            channel_id=message.channel.id,
-                channel_name=message.channel.name,
-                message_id=message.id,
-                query_timestamp=message.created_at,
-                user_id=message.author.id,
-                user_name=message.author.name,
-                query=text
-        )
+        result = await sable.response()
+        response_text = result['response_text']
+        await message.channel.send(response_text)
 
 if __name__ == "__main__":
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")

@@ -1,72 +1,63 @@
+import asyncio
+from pathlib import Path
 import aiosqlite
 import json
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 class DAO:
-    def __init__(self, db_path: str = r"..\..\data\database.db"):
-        self.db_path = db_path
-        self.conn: aiosqlite.Connection = None
+    def __init__(self):
+        self.db_path = Path(__file__).resolve().parents[2] / 'data' / 'database.db'
+        self.conn: aiosqlite.Connection | None = None
 
     async def init(self):
-        """Initialize connection, set row factory, create tables, and insert singleton persona."""
         self.conn = await aiosqlite.connect(self.db_path)
         self.conn.row_factory = aiosqlite.Row
 
-        # ---- Persona table (singleton) ----
-        await self.conn.execute(r"""
-            CREATE TABLE IF NOT EXISTS Persona (
-                id INTEGER PRIMARY KEY CHECK(id = 1),
-                user_id INTEGER,
-                AI_name TEXT,
-                personality_traits TEXT DEFAULT '{}',
-                tone_style TEXT,
-                principles TEXT DEFAULT '[]',
-                default_response_length INTEGER DEFAULT 255,
-                created_at INTEGER DEFAULT (strftime('%s','now')),
-                updated_at INTEGER DEFAULT (strftime('%s','now'))
-            );
-        """)
-        # Insert singleton row if not exists
-        await self.conn.execute("""
-            INSERT INTO Persona (id, user_id, AI_name, tone_style, default_response_length)
-            VALUES (1, 1452493514050113781, 'Sable', 'playful', 255)
-            ON CONFLICT(id) DO NOTHING;
-        """)
+        await self.conn.executescript("""
+        CREATE TABLE IF NOT EXISTS Persona (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            user_id INTEGER,
+            AI_name TEXT,
+            personality_traits TEXT DEFAULT '{}',
+            tone_style TEXT,
+            principles TEXT DEFAULT '[]',
+            default_response_length INTEGER DEFAULT 255,
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            updated_at INTEGER DEFAULT (strftime('%s','now'))
+        );
 
-        # ---- UserMemory table ----
-        await self.conn.execute(r"""
-            CREATE TABLE IF NOT EXISTS UserMemory (
-                user_id INTEGER PRIMARY KEY,
-                user_name TEXT,
-                nickname TEXT,
-                interests TEXT DEFAULT '[]',
-                learned_facts TEXT DEFAULT '{}',
-                interaction_count INTEGER DEFAULT 0,
-                last_seen_at INTEGER DEFAULT (strftime('%s','now'))
-            );
-        """)
+        INSERT INTO Persona (id, user_id, AI_name, tone_style, default_response_length)
+        VALUES (1, 1452493514050113781, 'Sable', 'playful', 255)
+        ON CONFLICT(id) DO NOTHING;
 
-        # ---- ConversationHistory table ----
-        await self.conn.execute(r"""
-            CREATE TABLE IF NOT EXISTS ConversationHistory (
-                message_id INTEGER PRIMARY KEY,
-                user_id INTEGER,
-                channel_id INTEGER,
-                sent_at INTEGER,
-                raw_text TEXT,
-                context TEXT DEFAULT '{}',
-                token_count INTEGER,
-                role_id INTEGER,
-                was_edited INTEGER DEFAULT 0,
-                reactions TEXT DEFAULT '{}'
-            );
-        """)
+        CREATE TABLE IF NOT EXISTS UserMemory (
+            user_id INTEGER PRIMARY KEY,
+            user_name TEXT,
+            nickname TEXT,
+            interests TEXT DEFAULT '[]',
+            learned_facts TEXT DEFAULT '{}',
+            interaction_count INTEGER DEFAULT 0,
+            last_seen_at INTEGER DEFAULT (strftime('%s','now'))
+        );
 
-        # ---- Indexes ----
-        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_history_user_id ON ConversationHistory(user_id);")
-        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_history_channel_id ON ConversationHistory(channel_id);")
-        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_last_seen ON UserMemory(last_seen_at);")
+        CREATE TABLE IF NOT EXISTS ConversationHistory (
+            message_id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            channel_id INTEGER,
+            sent_at INTEGER,
+            raw_text TEXT,
+            context TEXT DEFAULT '{}',
+            token_count INTEGER,
+            role_id INTEGER,
+            was_edited INTEGER DEFAULT 0,
+            reactions TEXT DEFAULT '{}'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_history_user_id ON ConversationHistory(user_id);
+        CREATE INDEX IF NOT EXISTS idx_history_channel_id ON ConversationHistory(channel_id);
+        CREATE INDEX IF NOT EXISTS idx_user_last_seen ON UserMemory(last_seen_at);
+        """)
 
         await self.conn.commit()
 
