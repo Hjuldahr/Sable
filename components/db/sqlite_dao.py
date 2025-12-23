@@ -5,8 +5,9 @@ from pathlib import Path
 import json
 from datetime import datetime, timezone
 from typing import Any, List, Optional
-
 import aiosqlite
+
+from components.ai.moods import Moods
 
 class SQLiteDAO:
     """
@@ -24,28 +25,27 @@ class SQLiteDAO:
         await self.conn.executescript("""
         CREATE TABLE IF NOT EXISTS Persona (
             id INTEGER PRIMARY KEY CHECK(id = 1),
-            user_id INTEGER,
-            AI_name TEXT,
+            user_id INTEGER DEFAULT 1452493514050113781,
+            AI_name TEXT DEFAULT 'Sable',
             personality_traits TEXT DEFAULT '{}',
-            tone_style TEXT,
+            valence REAL DEFAULT 0.5, -- Current Mood
+            arousal REAL DEFAULT 0.5, -- Current Mood
+            dominance REAL DEFAULT 0.5, -- Current Mood
+            mood_id INT DEFAULT 0, -- ENUM
             principles TEXT DEFAULT '[]',
             default_response_length INTEGER DEFAULT 255,
             created_at INTEGER DEFAULT (strftime('%s','now')),
             updated_at INTEGER DEFAULT (strftime('%s','now'))
         );
 
-        INSERT INTO Persona (id, user_id, AI_name, tone_style, default_response_length)
-        VALUES (1, 1452493514050113781, 'Sable', 'playful', 255)
-        ON CONFLICT(id) DO NOTHING;
-
         CREATE TABLE IF NOT EXISTS UserMemory (
             user_id INTEGER PRIMARY KEY,
             user_name TEXT,
             nickname TEXT,
-            interests TEXT DEFAULT '[]',
-            learned_facts TEXT DEFAULT '{}',
+            interests TEXT DEFAULT '[]', -- JSON
+            learned_facts TEXT DEFAULT '{}', -- JSON
             interaction_count INTEGER DEFAULT 0,
-            last_seen_at INTEGER DEFAULT (strftime('%s','now'))
+            last_seen_at INTEGER DEFAULT (strftime('%s','now')) -- TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS ConversationHistory (
@@ -54,12 +54,12 @@ class SQLiteDAO:
             channel_id INTEGER,
             sent_at INTEGER,
             raw_text TEXT,
-            context TEXT DEFAULT '{}',
+            context TEXT DEFAULT '{}', -- JSON
             token_count INTEGER,
-            role_id INTEGER,
-            was_edited INTEGER DEFAULT 0,
-            reactions TEXT DEFAULT '{}',
-            attachments TEXT DEFAULT '{}'
+            role_id INTEGER, -- ENUM
+            was_edited INTEGER DEFAULT 0, -- BOOLEAN
+            reactions TEXT DEFAULT '{}', -- JSON
+            attachments TEXT DEFAULT '{}' -- JSON
         );
 
         CREATE INDEX IF NOT EXISTS idx_history_user_id ON ConversationHistory(user_id);
@@ -74,7 +74,7 @@ class SQLiteDAO:
     async def select_persona(self) -> Optional[dict[str, Any]]:
         """Load singleton persona as dict with JSON fields decoded."""
         cursor = await self.conn.execute("""
-            SELECT user_id, AI_name, personality_traits, tone_style, principles, 
+            SELECT user_id, AI_name, personality_traits, valence, arousal, dominance, mood, principles, 
                    default_response_length, created_at, updated_at
             FROM Persona;
         """)
@@ -93,14 +93,17 @@ class SQLiteDAO:
         """Update persona JSON fields and timestamp."""
         personality_traits_json = json.dumps(persona.get('personality_traits', {}))
         principles_json = json.dumps(persona.get('principles', []))
-        tone_style = persona.get('tone_style', '')
+        valence = persona.get('valence', 0.5)
+        arousal = persona.get('arousal', 0.5)
+        dominance = persona.get('dominance', 0.5)
+        mood = persona.get('mood', Moods.NEUTRAL)
         updated_at = int(datetime.now(timezone.utc).timestamp())
 
         await self.conn.execute("""
             UPDATE Persona
-            SET personality_traits = ?, tone_style = ?, principles = ?, updated_at = ?
+            SET personality_traits = ?, valence = ?, arousal = ?, dominance = ?, mood = ?, principles = ?, updated_at = ?
             WHERE id = 1;
-        """, (personality_traits_json, tone_style, principles_json, updated_at))
+        """, (personality_traits_json, valence, arousal, dominance, mood, principles_json, updated_at))
         await self.conn.commit()
 
     # ---- UserMemory Methods ----
