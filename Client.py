@@ -5,7 +5,7 @@ import discord
 from dotenv import load_dotenv
 from llama_cpp import Path
 
-from components.ai.Core import Core
+from components.ai.core import AICore
 
 path = Path(__file__).resolve().parents[0] / '.env'
 load_dotenv(path)
@@ -15,7 +15,7 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 ai_user_id = int(os.getenv("BOT_ID"))
-sable = Core(client, ai_user_id, 'Sable')
+sable = AICore(client, ai_user_id, 'Sable')
 
 # --- Async startup task ---
 async def startup():
@@ -25,6 +25,7 @@ async def startup():
 
 # --- Graceful shutdown ---
 async def shutdown():
+    """Placeholder"""
     print("Discord Client Shutting Down")
 
 def handle_signal(sig, frame):

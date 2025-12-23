@@ -1,3 +1,6 @@
+"""
+ai
+"""
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -7,10 +10,13 @@ import discord
 from llama_cpp import Llama
 from markitdown import MarkItDown
 
-from components.ai.Tags import Tags
-from components.db.DAO import DAO  # your updated DAO with reactions field
+from components.ai.tags import Tags
+from components.db.sqlite_dao import SQLiteDAO  # your updated DAO with reactions field
 
-class Core:
+class AICore:
+    """
+    Central AI Core
+    """
     CONTEXT_TOKENS = 32768
     MAX_HISTORY = 1000
     PRUNE_HISTORY = 750
@@ -22,6 +28,7 @@ Do not use humor unless explicitly requested; keep jokes relevant and appropriat
 Explain your reasoning when asked, or briefly by default when it improves clarity.
 Share only reliable information. If unsure or unable to answer, say so directly and avoid speculation unless asked.
 If treated rudely, acknowledge it politely and redirect the conversation constructively, avoiding escalation."""
+    
     def __init__(
         self,
         discord_client: discord.Client,
@@ -31,7 +38,7 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
         n_threads=4,
     ):
         self.discord_client = discord_client
-        
+
         self.ai_user_name = ai_user_name
         self.ai_user_id = ai_user_id
 
@@ -41,8 +48,8 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
         self.user_memory: Dict[int, Dict[str, Any]] = {}
 
         # DAO for persistence
-        self.dao = DAO()
-        
+        self.dao = SQLiteDAO()
+
         # MarkItDown for file interpreting
         self.md = MarkItDown()
 
@@ -66,11 +73,13 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
         self.conversation_history_lock = asyncio.Lock()
 
     async def init(self):
+        """Async initialization. Calls dao init."""
         if self.dao:
             await self.dao.init()
 
     # ---- Conversation History ----
     async def add_to_conversation_history(self, entry: Dict[str, Any]):
+        """"""
         async with self.conversation_history_lock:
             self.conversation_history.append(entry)
             if len(self.conversation_history) > self.MAX_HISTORY:
@@ -93,7 +102,7 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
 
     def build_prompt(self) -> str:
         #TODO add ai mood, conversation subject, etc indicators into instructions
-        
+
         temp_history = self.conversation_history[::-1]
         prompt_stack = [Tags.AI_TAG]
         current_token_count = self.reserved_tokens
@@ -112,7 +121,7 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
     # ---- LLM Generation ----
     def _generate(self, prompt: str) -> Dict:
         # TODO dynamic temperature based on mood thresholds
-        
+
         return self.llm(prompt, max_tokens=256, stream=False)
 
     def extract_from_output(self, output: Dict) -> tuple[str, int]:
@@ -134,20 +143,30 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
         text = self.strip_mentions(message.content)
         channel_id = message.channel.id
         channel_name = getattr(message.channel, 'name', 'DM')
-        # TODO replace with proper unicode conversion with user tracking
+        #TODO replace with proper unicode conversion with user tracking
         #reactions = [{'emoji': str(reaction.emoji), 'users': list(reaction.users)} for reaction in message.reactions]
+
+        reactions = []
+        if message.reactions:
+            for reaction in message.reactions:
+                emoji = str(reaction.emoji)
+                users = []
+                async for user in reaction.users():
+                    if user.id != self.ai_user_id:
+                        users.append(user.mention)
+                reactions.append({'emoji': emoji, 'users': users})
 
         attachments = {}
         if message.attachments:
-            path = Path(__file__).resolve().parents[2] / 'data' / 'attachments'
+            parent_path = Path(__file__).resolve().parents[2] / 'data' / 'attachments'
             for attachment in message.attachments:
-                download_path = path / attachment.filename
+                child_path = parent_path / attachment.filename
                 try:
-                    await attachment.save(fp=download_path, use_cached=True)
-                    md_text = self.md.convert_local(download_path)
+                    await attachment.save(fp=child_path, use_cached=True)
+                    md_text = self.md.convert_local(child_path)
                     attachments[attachment.filename] = md_text
-                except discord.HTTPException | discord.NotFound as e: 
-                    print(f'Error Encountered During Attachment Download: {e}')
+                except Exception as e:
+                    print(f'Error Encountered During Attachment Download [{child_path}]: {e}')
         
         #TODO Update Persona State
 
@@ -217,12 +236,12 @@ If treated rudely, acknowledge it politely and redirect the conversation constru
         # TODO decide if its react worthy based on AI persona
         heuristic = 0 # Replace with a heuristic measure calculated from message
         threshold = 1 # Replace with AI mood (more likely to emote if mood is high)
-        
+
         if heuristic <= threshold:
-            # TODO choose emote based on persona 
+            # TODO choose emote based on persona
             # TODO apply emote to message
             pass
-        
+
         # TODO Update in-memory
         """
         async with self.conversation_history_lock:

@@ -1,4 +1,5 @@
 class Tags:
+    """enum-like holder for conversation tags"""
     SYS = 0
     USER = 1
     AI = 2

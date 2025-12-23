@@ -1,16 +1,23 @@
-import asyncio
+"""
+sqlite_dao
+"""
 from pathlib import Path
-import aiosqlite
 import json
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-class DAO:
+import aiosqlite
+
+class SQLiteDAO:
+    """
+    Handles asynchronous connections and statements for SQLite
+    """
     def __init__(self):
         self.db_path = Path(__file__).resolve().parents[2] / 'data' / 'database.db'
         self.conn: aiosqlite.Connection | None = None
 
     async def init(self):
+        """Async initialization. Connects to SQLite and creates missing tables"""
         self.conn = await aiosqlite.connect(self.db_path)
         self.conn.row_factory = aiosqlite.Row
 
@@ -175,6 +182,7 @@ class DAO:
         return safe_rows[::-1]  # return oldest -> newest
 
     async def upsert_conversation_history(self, conversation_history: dict[str, Any]) -> None:
+        """Insert or update Conversation History"""
         sent_at = int(conversation_history.get('sent_at', datetime.now(timezone.utc).timestamp()))
         context_json = json.dumps(conversation_history.get('context', {}))
         reactions_json = json.dumps(conversation_history.get('reactions', {}))  
@@ -220,6 +228,7 @@ class DAO:
     # ---- Cleanup ----
 
     async def close(self) -> None:
+        """Closes SQLite connection."""
         if self.conn:
             await self.conn.close()
             self.conn = None
