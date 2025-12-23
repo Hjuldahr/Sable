@@ -10,6 +10,7 @@ import discord
 from llama_cpp import Llama
 from markitdown import MarkItDown
 
+from components.ai.moods import Moods
 from components.ai.tags import Tags
 from components.db.sqlite_dao import SQLiteDAO  # your updated DAO with reactions field
 
@@ -159,27 +160,29 @@ class AICore:
         prompt_stack.append(f'{Tags.SYS_TAG} {instruction}')
         return '\n'.join(reversed(prompt_stack))
 
+    def clamp(self, value: float, min_value: float = 0.0, max_value: float = 1.0) -> float:
+        return max(min_value, min(max_value, value))
+
     # ---- LLM Generation ----
+    def compute_temperature(self) -> float:
+        """
+        Compute LLM temperature based on persona mood.
+        Neutral VAD = (0.5, 0.5, 0.5) → low temp.
+        Further from neutral → higher temp.
+        """
+        neutral = Moods.VAD[Moods.NEUTRAL]
+        distance = Moods.distance(neutral, self.persona)
+        return self.clamp(distance, min_value=0.2, max_value=1.0)
+    
     def _generate(self, prompt: str) -> Dict:
-        """
-        LLM call wrapper\n
-        Llama.call() is natively a blocking operation
-
-        Args:
-            prompt (str): The prompt used for LLM generation
-
-        Returns:
-            Dict: The result produced by the LLM
-        """
-        mood = self.persona.get('tone_style', 'neutral')
-        temperature_map = {
-            'playful': 0.9,
-            'curious': 0.7,
-            'neutral': 0.5,
-            'serious': 0.3
-        }
-        temperature = temperature_map.get(mood, 0.5)
-        return self.llm(prompt, max_tokens=256, temperature=temperature, stream=False)
+        """LLM Wrapper"""
+        temperature = self.compute_temperature()
+        return self.llm(
+            prompt,
+            max_tokens=self.RESERVED_OUTPUT_TOKENS,
+            temperature=temperature,
+            stream=False
+        )
 
     def extract_from_output(self, output: Dict) -> tuple[str, int]:
         response = output['choices'][0]['text']
