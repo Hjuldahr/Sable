@@ -140,7 +140,7 @@ class AICore:
             str: LLM Prompt
         """
         # Add AI mood and conversation subject indicators into instructions
-        ai_mood = self.persona.get('mood', 'neutral')
+        ai_mood = self.persona.get('tone_style', 'neutral')
         conversation_subject = self.persona.get('conversation_subject', 'general')
         instruction = f"{self.INSTRUCTION}\nAI Mood: {ai_mood}\nConversation Subject: {conversation_subject}"
 
@@ -171,7 +171,7 @@ class AICore:
         Returns:
             Dict: The result produced by the LLM
         """
-        mood = self.persona.get('mood', 'neutral')
+        mood = self.persona.get('tone_style', 'neutral')
         temperature_map = {
             'playful': 0.9,
             'curious': 0.7,
@@ -182,7 +182,6 @@ class AICore:
         return self.llm(prompt, max_tokens=256, temperature=temperature, stream=False)
 
     def extract_from_output(self, output: Dict) -> tuple[str, int]:
-
         response = output['choices'][0]['text']
         # Remove trailing user tags if present
         if Tags.USER_TAG in response:
@@ -201,6 +200,48 @@ class AICore:
         """
         return raw_text.replace(f'<@!{self.ai_user_id}>', '').replace(f'<@{self.ai_user_id}>', '').strip()
 
+    async def extract_reactions_from_message(self, message: discord.Message):
+        reactions = []
+        
+        if message.reactions:
+            for reaction in message.reactions:
+                emoji = str(reaction.emoji)
+                users = []
+                async for user in reaction.users():
+                    if user.id != self.ai_user_id:
+                        users.append(user.mention)
+                reactions.append({'emoji': emoji, 'users': users})
+                
+        return reactions
+    
+    async def extract_attachments_from_message(self, message: discord.Message):
+        attachments = {}
+        
+        if message.attachments:
+            parent_path = Path(__file__).resolve().parents[2] / 'data' / 'attachments'
+            for attachment in message.attachments:
+                child_path = parent_path / attachment.filename
+                try:
+                    await attachment.save(fp=child_path, use_cached=True)
+                    md_text = self.md.convert_local(child_path)
+                    attachments[attachment.filename] = md_text
+                except Exception as e:
+                    print(f'Error Encountered During Attachment Download [{child_path}]: {e}')
+                    
+        return attachments
+
+    # ---- Persona / Mood / Subject Helpers ----
+    def update_ai_tone_style(self, text: str) -> str:
+        """
+        Updates AI mood heuristically based on message content
+        """
+        # Example: simple keyword based mood
+        if any(w in text.lower() for w in ['!', 'excited', 'wow']):
+            return 'playful'
+        elif any(w in text.lower() for w in ['?', 'curious', 'why']):
+            return 'curious'
+        return 'neutral'
+
     # ---- Discord Interaction ----
     async def listen(self, message: discord.Message):
         """
@@ -215,32 +256,13 @@ class AICore:
         channel_id = message.channel.id
         channel_name = getattr(message.channel, 'name', 'DM')
 
-        reactions = []
-        if message.reactions:
-            for reaction in message.reactions:
-                emoji = str(reaction.emoji)
-                users = []
-                async for user in reaction.users():
-                    if user.id != self.ai_user_id:
-                        users.append(user.mention)
-                reactions.append({'emoji': emoji, 'users': users})
+        reactions = self.extract_reactions_from_message(message)
+        attachments = self.extract_attachments_from_message(message)
 
-        attachments = {}
-        if message.attachments:
-            parent_path = Path(__file__).resolve().parents[2] / 'data' / 'attachments'
-            for attachment in message.attachments:
-                child_path = parent_path / attachment.filename
-                try:
-                    await attachment.save(fp=child_path, use_cached=True)
-                    md_text = self.md.convert_local(child_path)
-                    attachments[attachment.filename] = md_text
-                except Exception as e:
-                    print(f'Error Encountered During Attachment Download [{child_path}]: {e}')
-        
         # Update Persona State based on context or message content
         self.persona['last_interaction'] = datetime.now(timezone.utc).timestamp()
         self.persona['conversation_subject'] = self.infer_conversation_subject(text)
-        self.persona['mood'] = self.update_ai_mood(text)
+        self.persona['tone_style'] = self.update_ai_tone_style(text)
 
         # Update UserMemory
         user_memory = self.user_memory.get(user_id, {
@@ -283,18 +305,6 @@ class AICore:
         }
         await self.add_to_conversation_history(entry)
 
-    # ---- Persona / Mood / Subject Helpers ----
-    def update_ai_mood(self, text: str) -> str:
-        """
-        Updates AI mood heuristically based on message content
-        """
-        # Example: simple keyword based mood
-        if any(w in text.lower() for w in ['!', 'excited', 'wow']):
-            return 'playful'
-        elif any(w in text.lower() for w in ['?', 'curious', 'why']):
-            return 'curious'
-        return 'neutral'
-
     def infer_conversation_subject(self, text: str) -> str:
         """
         Derives a simple conversation subject from text
@@ -324,7 +334,7 @@ class AICore:
         facts_key = f"fact_{len(facts) + 1}"
         facts[facts_key] = text
         return facts
-
+    
     async def response(self) -> Dict[str, Any]:
         """Generate a response using persona, user memory, and conversation history.
 
@@ -334,6 +344,8 @@ class AICore:
         prompt = self.build_prompt()
         output = await asyncio.get_running_loop().run_in_executor(self.executor, self._generate, prompt)
         response_text, token_count = self.extract_from_output(output)
+
+
 
         # Record AI message
         entry = {
