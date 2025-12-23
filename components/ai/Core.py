@@ -139,20 +139,24 @@ class AICore:
         Returns:
             str: LLM Prompt
         """
-        #TODO add ai mood, conversation subject, etc indicators into instructions
+        # Add AI mood and conversation subject indicators into instructions
+        ai_mood = self.persona.get('mood', 'neutral')
+        conversation_subject = self.persona.get('conversation_subject', 'general')
+        instruction = f"{self.INSTRUCTION}\nAI Mood: {ai_mood}\nConversation Subject: {conversation_subject}"
+
         temp_history = self.conversation_history[::-1]
         prompt_stack = [Tags.AI_TAG]
         current_token_count = self.reserved_tokens
 
         for entry in temp_history:
             token_count = self.tag_token_counts[entry['role_id']] + entry.get('token_count', 0)
-            
-            if token_count > self.CONTEXT_TOKENS:
+
+            if token_count + current_token_count > self.CONTEXT_TOKENS:
                 break
             current_token_count += token_count
             prompt_stack.append(self.format_line(entry))
 
-        prompt_stack.append(f'{Tags.SYS_TAG} {self.INSTRUCTION}')
+        prompt_stack.append(f'{Tags.SYS_TAG} {instruction}')
         return '\n'.join(reversed(prompt_stack))
 
     # ---- LLM Generation ----
@@ -167,8 +171,15 @@ class AICore:
         Returns:
             Dict: The result produced by the LLM
         """
-        # TODO dynamic temperature based on mood thresholds
-        return self.llm(prompt, max_tokens=256, stream=False)
+        mood = self.persona.get('mood', 'neutral')
+        temperature_map = {
+            'playful': 0.9,
+            'curious': 0.7,
+            'neutral': 0.5,
+            'serious': 0.3
+        }
+        temperature = temperature_map.get(mood, 0.5)
+        return self.llm(prompt, max_tokens=256, temperature=temperature, stream=False)
 
     def extract_from_output(self, output: Dict) -> tuple[str, int]:
 
@@ -226,7 +237,10 @@ class AICore:
                 except Exception as e:
                     print(f'Error Encountered During Attachment Download [{child_path}]: {e}')
         
-        #TODO Update Persona State
+        # Update Persona State based on context or message content
+        self.persona['last_interaction'] = datetime.now(timezone.utc).timestamp()
+        self.persona['conversation_subject'] = self.infer_conversation_subject(text)
+        self.persona['mood'] = self.update_ai_mood(text)
 
         # Update UserMemory
         user_memory = self.user_memory.get(user_id, {
@@ -238,10 +252,14 @@ class AICore:
             'interaction_count': 0, 
             'last_seen_at': datetime.now(timezone.utc).timestamp()
         })
-        #user_memory['user_name'] = user_name
+        
+        # Simple heuristics to extract interests/facts
+        user_memory['interests'] = self.update_user_interests(user_memory['interests'], text)
+        user_memory['learned_facts'] = self.update_user_facts(user_memory['learned_facts'], text)
         user_memory['interaction_count'] += 1
         user_memory['last_seen_at'] = datetime.now(timezone.utc).timestamp()
         self.user_memory[user_id] = user_memory
+        
         await self.dao.upsert_user_memory(user_memory)
 
         # Estimate token count
@@ -264,6 +282,48 @@ class AICore:
             'attachments': attachments
         }
         await self.add_to_conversation_history(entry)
+
+    # ---- Persona / Mood / Subject Helpers ----
+    def update_ai_mood(self, text: str) -> str:
+        """
+        Updates AI mood heuristically based on message content
+        """
+        # Example: simple keyword based mood
+        if any(w in text.lower() for w in ['!', 'excited', 'wow']):
+            return 'playful'
+        elif any(w in text.lower() for w in ['?', 'curious', 'why']):
+            return 'curious'
+        return 'neutral'
+
+    def infer_conversation_subject(self, text: str) -> str:
+        """
+        Derives a simple conversation subject from text
+        """
+        # TODO use vader, or whatever
+        # Placeholder: first noun or keyword (can integrate NLP later)
+        words = text.split()
+        return words[0] if words else 'general'
+
+    def update_user_interests(self, interests: List[str], text: str) -> List[str]:
+        """
+        Adds new detected interests from text
+        """
+        # TODO replace with tiny model extractor
+        # Placeholder: simple keyword detection
+        keywords = [w.lower() for w in text.split() if len(w) > 3]
+        for k in keywords:
+            if k not in interests:
+                interests.append(k)
+        return interests
+
+    def update_user_facts(self, facts: Dict[str, Any], text: str) -> Dict[str, Any]:
+        """
+        Adds new learned facts from user text
+        """
+        # TODO NLP entity extraction
+        facts_key = f"fact_{len(facts) + 1}"
+        facts[facts_key] = text
+        return facts
 
     async def response(self) -> Dict[str, Any]:
         """Generate a response using persona, user memory, and conversation history.
@@ -294,30 +354,20 @@ class AICore:
         return {'response_text': response_text} #Include file creation and more if needed in future
 
     async def react(self, message_id: int):
-        """Add reaction to a conversation history entry."""
-        # TODO decide if its react worthy based on AI persona
-        heuristic = 0 # Replace with a heuristic measure calculated from message
-        threshold = 1 # Replace with AI mood (more likely to emote if mood is high)
-
-        if heuristic <= threshold:
-            # TODO choose emote based on persona
-            # TODO apply emote to message
-            pass
-
-        # TODO Update in-memory
-        """
+        """Add reaction to a conversation history entry based on AI persona."""
+        # TODO more dynamic reaction (not just 👍)
+        # Simple heuristic: react if message has positive keywords
         async with self.conversation_history_lock:
             for entry in self.conversation_history:
                 if entry['message_id'] == message_id:
-                    reactions = entry.get('reactions', {})
-                    reactions.setdefault(emoji, [])
-                    if user_id not in reactions[emoji]:
-                        reactions[emoji].append(user_id)
-                    entry['reactions'] = reactions
-                    # Persist
-                    await self.dao.upsert_conversation_history(entry)
+                    text = entry['raw_text']
+                    if any(w in text.lower() for w in ['wow', 'nice', 'good', 'great']):
+                        emoji = '👍'
+                        reactions = entry.get('reactions', [])
+                        reactions.append({'emoji': emoji, 'users': [self.ai_user_name]})
+                        entry['reactions'] = reactions
+                        await self.dao.upsert_conversation_history(entry)
                     break
-        """
 
     # ---- Token utilities ----
     def token_counter(self, text: str) -> int:
