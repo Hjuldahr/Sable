@@ -7,10 +7,11 @@ import aiosqlite
 
 from components.ai.moods import Moods
 
+
 class SQLiteDAO:
     def __init__(self):
         self.db_path = Path(__file__).resolve().parents[2] / 'data' / 'database.db'
-        self.conn: aiosqlite.Connection | None = None
+        self.conn: Optional[aiosqlite.Connection] = None
 
     async def init(self):
         self.conn = await aiosqlite.connect(self.db_path)
@@ -63,30 +64,48 @@ class SQLiteDAO:
         CREATE INDEX IF NOT EXISTS idx_history_channel_id ON ConversationHistory(channel_id);
         CREATE INDEX IF NOT EXISTS idx_user_last_seen ON UserMemory(last_seen_at);
         """)
-
         await self.conn.commit()
+
+    # ---- Helper Methods ----
+
+    @staticmethod
+    def _json_load(value: str, default: Any) -> Any:
+        try:
+            return json.loads(value) if value else default
+        except json.JSONDecodeError:
+            return default
+
+    @staticmethod
+    def _json_dump(value: Any) -> str:
+        return json.dumps(value)
+
+    @staticmethod
+    def _to_ts(dt: Optional[datetime]) -> int:
+        return int(dt.timestamp()) if dt else int(datetime.now(timezone.utc).timestamp())
+
+    @staticmethod
+    def _from_ts(ts: Optional[int]) -> Optional[datetime]:
+        return datetime.fromtimestamp(ts, tz=timezone.utc) if ts else None
 
     # ---- Persona Methods ----
 
     async def select_persona(self) -> Optional[dict[str, Any]]:
-        cursor = await self.conn.execute("""
-            SELECT * FROM Persona;
-        """)
+        cursor = await self.conn.execute("SELECT * FROM Persona;")
         row = await cursor.fetchone()
         if not row:
             return None
-
         persona = dict(row)
-        for field in ['personality_traits', 'likes', 'dislikes', 'interests', 'memories']:
-            persona[field] = json.loads(persona.get(field, '{}' if field == 'personality_traits' else '[]'))
-        for ts in ['created_at', 'updated_at']:
-            persona[ts] = datetime.fromtimestamp(persona[ts], tz=timezone.utc) if persona.get(ts) else None
+        for field, default in [('personality_traits', {}), ('likes', []), ('dislikes', []),
+                               ('interests', []), ('memories', [])]:
+            persona[field] = self._json_load(persona.get(field), default)
+        persona['created_at'] = self._from_ts(persona.get('created_at'))
+        persona['updated_at'] = self._from_ts(persona.get('updated_at'))
         return persona
 
     async def update_persona(self, persona: dict[str, Any]) -> None:
         fields = ['personality_traits', 'likes', 'dislikes', 'interests', 'memories']
-        json_fields = {f: json.dumps(persona.get(f, {} if f=='personality_traits' else [])) for f in fields}
-        updated_at = int(datetime.now(timezone.utc).timestamp())
+        json_fields = {f: self._json_dump(persona.get(f, {} if f == 'personality_traits' else [])) for f in fields}
+        updated_at = self._to_ts(None)
 
         await self.conn.execute("""
             UPDATE Persona
@@ -122,23 +141,21 @@ class SQLiteDAO:
     # ---- UserMemory Methods ----
 
     async def select_all_user_memories(self) -> List[dict[str, Any]]:
-        cursor = await self.conn.execute("""
-            SELECT * FROM UserMemory;
-        """)
+        cursor = await self.conn.execute("SELECT * FROM UserMemory;")
         rows = await cursor.fetchall()
         memories = []
         for row in rows:
             um = dict(row)
-            um['interests'] = json.loads(um.get('interests', '[]'))
-            um['learned_facts'] = json.loads(um.get('learned_facts', '{}'))
-            um['last_seen_at'] = datetime.fromtimestamp(um['last_seen_at'], tz=timezone.utc) if um.get('last_seen_at') else None
+            um['interests'] = self._json_load(um.get('interests'), [])
+            um['learned_facts'] = self._json_load(um.get('learned_facts'), {})
+            um['last_seen_at'] = self._from_ts(um.get('last_seen_at'))
             memories.append(um)
         return memories
 
     async def upsert_user_memory(self, user_memory: dict[str, Any]) -> None:
-        interests_json = json.dumps(user_memory.get('interests', []))
-        learned_facts_json = json.dumps(user_memory.get('learned_facts', {}))
-        last_seen = int(user_memory.get('last_seen_at', datetime.now(timezone.utc).timestamp()))
+        interests_json = self._json_dump(user_memory.get('interests', []))
+        learned_facts_json = self._json_dump(user_memory.get('learned_facts', {}))
+        last_seen = self._to_ts(user_memory.get('last_seen_at'))
 
         await self.conn.execute("""
             INSERT INTO UserMemory (user_id, user_name, nickname, interests, learned_facts, interaction_count, last_seen_at)
@@ -168,9 +185,7 @@ class SQLiteDAO:
     # ---- ConversationHistory Methods ----
 
     async def threshold_select_conversation_history(self, token_count_threshold: int) -> List[dict[str, Any]]:
-        cursor = await self.conn.execute("""
-            SELECT * FROM ConversationHistory ORDER BY sent_at DESC LIMIT 1000;
-        """)
+        cursor = await self.conn.execute("SELECT * FROM ConversationHistory ORDER BY sent_at DESC LIMIT 1000;")
         rows = await cursor.fetchall()
         total_tokens = 0
         safe_rows = []
@@ -180,15 +195,15 @@ class SQLiteDAO:
                 break
             total_tokens += ch.get('token_count', 0)
             for field in ['context', 'reactions', 'attachments']:
-                ch[field] = json.loads(ch.get(field, '{}'))
+                ch[field] = self._json_load(ch.get(field), {})
             safe_rows.append(ch)
         return safe_rows[::-1]
 
     async def upsert_conversation_history(self, conversation_history: dict[str, Any]) -> None:
-        sent_at = int(conversation_history.get('sent_at', datetime.now(timezone.utc).timestamp()))
-        context_json = json.dumps(conversation_history.get('context', {}))
-        reactions_json = json.dumps(conversation_history.get('reactions', {}))  
-        attachments_json = json.dumps(conversation_history.get('attachments', {}))
+        sent_at = self._to_ts(conversation_history.get('sent_at'))
+        context_json = self._json_dump(conversation_history.get('context', {}))
+        reactions_json = self._json_dump(conversation_history.get('reactions', {}))
+        attachments_json = self._json_dump(conversation_history.get('attachments', {}))
 
         await self.conn.execute("""
             INSERT INTO ConversationHistory 
@@ -223,7 +238,7 @@ class SQLiteDAO:
     async def delete_conversation_history(self, message_id: int) -> None:
         await self.conn.execute("DELETE FROM ConversationHistory WHERE message_id = ?;", (message_id,))
         await self.conn.commit()
-        
+
     async def delete_all_conversation_history(self) -> None:
         await self.conn.execute("DELETE FROM ConversationHistory;")
         await self.conn.commit()
