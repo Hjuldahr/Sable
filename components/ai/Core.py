@@ -1,3 +1,4 @@
+import random
 import re
 import nltk
 import asyncio
@@ -474,6 +475,88 @@ class AICore:
             'attachments': attachments
         }
         await self.add_to_conversation_history(entry)
+        
+    # --- Dynamic Reaction System ---
+    async def react(self, message_id: int, history_window: int = 20, proactive_chance: float = 0.2):
+        """
+        Add dynamic reactions based on persona state, message content,
+        recent important conversation topics, and proactive mood-based triggers.
+
+        Args:
+            message_id (int): The message ID to react to
+            history_window (int): Number of recent messages to consider for context
+            proactive_chance (float): Probability to add reaction proactively (0..1)
+        """
+        async with self.conversation_history_lock:
+            target_entry = None
+
+            # Build a window of recent important topics
+            recent_topics = deque(maxlen=history_window)
+            for entry in reversed(self.conversation_history[-history_window:]):
+                recent_topics.extend(entry.get('context', {}).get('important_topics', []))
+
+            for entry in self.conversation_history:
+                if entry['message_id'] != message_id:
+                    continue
+
+                target_entry = entry
+                text = entry['raw_text'].lower()
+                current_reactions = entry.get('reactions', [])
+                chosen_emojis = set()
+
+                valence = self.persona.get('valence', 0.5)
+                arousal = self.persona.get('arousal', 0.5)
+                dominance = self.persona.get('dominance', 0.5)
+
+                # --- 1️⃣ VAD-based emojis ---
+                if valence > 0.7:
+                    chosen_emojis.add(random.choice(['😊', '👍', '😄', '💖']))
+                elif 0.4 <= valence <= 0.7:
+                    chosen_emojis.add(random.choice(['🤔', '😐', '👌']))
+                else:
+                    chosen_emojis.add(random.choice(['😟', '😢', '⚠️']))
+
+                if arousal > 0.7:
+                    chosen_emojis.add(random.choice(['🔥', '💥', '🎉', '✨']))
+                if dominance > 0.7:
+                    chosen_emojis.add(random.choice(['💪', '👑', '🚀']))
+
+                # --- 2️⃣ Likes / dislikes emojis ---
+                if any(word in text for word in self.persona.get('likes', [])):
+                    chosen_emojis.add('💖')
+                if any(word in text for word in self.persona.get('dislikes', [])):
+                    chosen_emojis.add('😡')
+
+                # --- 3️⃣ Recent important topics influence ---
+                for topic in recent_topics:
+                    if topic.lower() in text:
+                        topic_emoji = random.choice(['📌', '⚠️', '💡', '📝'])
+                        chosen_emojis.add(topic_emoji)
+
+                # --- 4️⃣ Proactive mood-based reactions ---
+                if random.random() < proactive_chance:
+                    # React to the overall “vibe” of the conversation
+                    if valence > 0.6:
+                        chosen_emojis.add(random.choice(['😄', '✨', '👍']))
+                    elif valence < 0.4:
+                        chosen_emojis.add(random.choice(['😟', '⚠️', '😢']))
+                    if arousal > 0.6:
+                        chosen_emojis.add(random.choice(['🔥', '💥', '🎉']))
+
+                # --- 5️⃣ Limit to max 3 emojis ---
+                final_emojis = list(chosen_emojis)[:3]
+
+                # Append new emojis if not already present
+                for emoji in final_emojis:
+                    if not any(r['emoji'] == emoji for r in current_reactions):
+                        current_reactions.append({'emoji': emoji, 'users': [self.ai_user_name]})
+
+                entry['reactions'] = current_reactions
+                await self.dao.upsert_conversation_history(entry)
+                break
+
+            if not target_entry:
+                print(f"Message ID {message_id} not found in conversation history.")
 
     # ==================== Close ====================
     def close(self):
