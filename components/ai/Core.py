@@ -123,11 +123,12 @@ class AICore:
         return f"{Tags.TAGS[entry['role_id']]} [{channel_name}] {user_name}: {raw_text}"
 
     def build_prompt(self) -> str:
-        """Compose LLM prompt with persona snapshot and recent topics."""
-        instruction = f"{self.INSTRUCTION}\nAI Mood: {self.persona.get('tone_style')}\n" \
-                      f"Conversation Subject: {self.persona.get('conversation_subject')}\n" \
-                      f"Recent Important Topics: {', '.join(self.persona.get('important', [])[:5])}\n" \
-                      f"AI Interests: {', '.join(self.persona.get('interests', [])[:5])}"
+        """
+        Composes a prompt from history, persona state, and summarized attachments.
+        """
+        ai_mood = self.persona.get('tone_style', 'neutral')
+        conversation_subject = self.persona.get('conversation_subject', 'general')
+        instruction = f"{self.INSTRUCTION}\nAI Mood: {ai_mood}\nConversation Subject: {conversation_subject}"
 
         temp_history = self.conversation_history[::-1]
         prompt_stack = [Tags.AI_TAG]
@@ -138,10 +139,19 @@ class AICore:
             if token_count + current_token_count > self.CONTEXT_TOKENS:
                 break
             current_token_count += token_count
+
+            # Inject attachment summaries if present
+            attachment_summaries = entry.get('attachments', {})
+            if attachment_summaries:
+                summarized = asyncio.run(self.summarize_attachments(attachment_summaries))
+                for fname, summary in summarized.items():
+                    entry_text = f"[Attachment Summary: {fname}] {summary}"
+                    prompt_stack.append(f"{Tags.USER_TAG} {entry_text}")
+
             prompt_stack.append(self.format_line(entry))
 
-        prompt_stack.append(f"{Tags.SYS_TAG} {instruction}")
-        return "\n".join(reversed(prompt_stack))
+    prompt_stack.append(f'{Tags.SYS_TAG} {instruction}')
+    return '\n'.join(reversed(prompt_stack))
 
     # ==================== LLM Generation ====================
     def _generate(self, prompt: str) -> Dict:
@@ -557,6 +567,31 @@ class AICore:
 
             if not target_entry:
                 print(f"Message ID {message_id} not found in conversation history.")
+
+    async def summarize_attachments(self, attachments: dict[str, str], max_chars: int = 500) -> dict[str, str]:
+        """
+        Summarizes all attachment markdowns to a compact form for prompt injection.
+        
+        Args:
+            attachments: Dict of {filename: markdown_content}
+            max_chars: Max characters per summary to avoid exceeding token limits
+        
+        Returns:
+            Dict of {filename: summary}
+        """
+        summaries = {}
+        for filename, content in attachments.items():
+            if not content.strip():
+                continue
+            prompt = f"Summarize this markdown file into concise key points (max {max_chars} characters):\n\n{content}"
+            # Use LLM for summarization
+            output = await asyncio.get_running_loop().run_in_executor(
+                self.executor, self._generate, prompt
+            )
+            summary_text, _ = self.extract_from_output(output)
+            # Truncate if needed
+            summaries[filename] = summary_text[:max_chars].strip()
+        return summaries
 
     # ==================== Close ====================
     def close(self):

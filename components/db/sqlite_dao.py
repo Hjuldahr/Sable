@@ -1,6 +1,4 @@
-"""
-sqlite_dao
-"""
+# sqlite_dao
 from pathlib import Path
 import json
 from datetime import datetime, timezone
@@ -10,15 +8,11 @@ import aiosqlite
 from components.ai.moods import Moods
 
 class SQLiteDAO:
-    """
-    Handles asynchronous connections and statements for SQLite
-    """
     def __init__(self):
         self.db_path = Path(__file__).resolve().parents[2] / 'data' / 'database.db'
         self.conn: aiosqlite.Connection | None = None
 
     async def init(self):
-        """Async initialization. Connects to SQLite and creates missing tables"""
         self.conn = await aiosqlite.connect(self.db_path)
         self.conn.row_factory = aiosqlite.Row
 
@@ -28,10 +22,10 @@ class SQLiteDAO:
             user_id INTEGER DEFAULT 1452493514050113781,
             AI_name TEXT DEFAULT 'Sable',
             personality_traits TEXT DEFAULT '{}',
-            valence REAL DEFAULT 0.5, -- Current Mood
-            arousal REAL DEFAULT 0.5, -- Current Mood
-            dominance REAL DEFAULT 0.5, -- Current Mood
-            mood_id INT DEFAULT 0, -- ENUM
+            valence REAL DEFAULT 0.5,
+            arousal REAL DEFAULT 0.5,
+            dominance REAL DEFAULT 0.5,
+            mood_id INT DEFAULT 0,
             likes TEXT DEFAULT '[]',
             dislikes TEXT DEFAULT '[]',
             interests TEXT DEFAULT '[]',
@@ -45,10 +39,10 @@ class SQLiteDAO:
             user_id INTEGER PRIMARY KEY,
             user_name TEXT,
             nickname TEXT,
-            interests TEXT DEFAULT '[]', -- JSON
-            learned_facts TEXT DEFAULT '{}', -- JSON
+            interests TEXT DEFAULT '[]',
+            learned_facts TEXT DEFAULT '{}',
             interaction_count INTEGER DEFAULT 0,
-            last_seen_at INTEGER DEFAULT (strftime('%s','now')) -- TIMESTAMP
+            last_seen_at INTEGER DEFAULT (strftime('%s','now'))
         );
 
         CREATE TABLE IF NOT EXISTS ConversationHistory (
@@ -57,12 +51,12 @@ class SQLiteDAO:
             channel_id INTEGER,
             sent_at INTEGER,
             raw_text TEXT,
-            context TEXT DEFAULT '{}', -- JSON
+            context TEXT DEFAULT '{}',
             token_count INTEGER,
-            role_id INTEGER, -- ENUM
-            was_edited INTEGER DEFAULT 0, -- BOOLEAN
-            reactions TEXT DEFAULT '{}', -- JSON
-            attachments TEXT DEFAULT '{}' -- JSON
+            role_id INTEGER,
+            was_edited INTEGER DEFAULT 0,
+            reactions TEXT DEFAULT '{}',
+            attachments TEXT DEFAULT '{}'
         );
 
         CREATE INDEX IF NOT EXISTS idx_history_user_id ON ConversationHistory(user_id);
@@ -75,60 +69,73 @@ class SQLiteDAO:
     # ---- Persona Methods ----
 
     async def select_persona(self) -> Optional[dict[str, Any]]:
-        """Load singleton persona as dict with JSON fields decoded."""
         cursor = await self.conn.execute("""
-            SELECT user_id, AI_name, personality_traits, valence, arousal, dominance, mood, principles, 
-                   default_response_length, created_at, updated_at
-            FROM Persona;
+            SELECT * FROM Persona;
         """)
         row = await cursor.fetchone()
         if not row:
             return None
 
         persona = dict(row)
-        persona['personality_traits'] = json.loads(persona.get('personality_traits', '{}'))
-        persona['principles'] = json.loads(persona.get('principles', '[]'))
-        persona['created_at'] = datetime.fromtimestamp(persona['created_at'], tz=timezone.utc)
-        persona['updated_at'] = datetime.fromtimestamp(persona['updated_at'], tz=timezone.utc) if persona.get('updated_at') else None
+        for field in ['personality_traits', 'likes', 'dislikes', 'interests', 'memories']:
+            persona[field] = json.loads(persona.get(field, '{}' if field == 'personality_traits' else '[]'))
+        for ts in ['created_at', 'updated_at']:
+            persona[ts] = datetime.fromtimestamp(persona[ts], tz=timezone.utc) if persona.get(ts) else None
         return persona
 
     async def update_persona(self, persona: dict[str, Any]) -> None:
-        """Update persona JSON fields and timestamp."""
-        personality_traits_json = json.dumps(persona.get('personality_traits', {}))
-        principles_json = json.dumps(persona.get('principles', []))
-        valence = persona.get('valence', 0.5)
-        arousal = persona.get('arousal', 0.5)
-        dominance = persona.get('dominance', 0.5)
-        mood = persona.get('mood', Moods.NEUTRAL)
+        fields = ['personality_traits', 'likes', 'dislikes', 'interests', 'memories']
+        json_fields = {f: json.dumps(persona.get(f, {} if f=='personality_traits' else [])) for f in fields}
         updated_at = int(datetime.now(timezone.utc).timestamp())
 
         await self.conn.execute("""
             UPDATE Persona
-            SET personality_traits = ?, valence = ?, arousal = ?, dominance = ?, mood = ?, principles = ?, updated_at = ?
+            SET AI_name = ?,
+                personality_traits = ?,
+                valence = ?,
+                arousal = ?,
+                dominance = ?,
+                mood_id = ?,
+                likes = ?,
+                dislikes = ?,
+                interests = ?,
+                memories = ?,
+                default_response_length = ?,
+                updated_at = ?
             WHERE id = 1;
-        """, (personality_traits_json, valence, arousal, dominance, mood, principles_json, updated_at))
+        """, (
+            persona.get('AI_name', 'Sable'),
+            json_fields['personality_traits'],
+            persona.get('valence', 0.5),
+            persona.get('arousal', 0.5),
+            persona.get('dominance', 0.5),
+            persona.get('mood_id', Moods.NEUTRAL),
+            json_fields['likes'],
+            json_fields['dislikes'],
+            json_fields['interests'],
+            json_fields['memories'],
+            persona.get('default_response_length', 255),
+            updated_at
+        ))
         await self.conn.commit()
 
     # ---- UserMemory Methods ----
 
     async def select_all_user_memories(self) -> List[dict[str, Any]]:
-        """Return all user memories as list of dicts with JSON decoded."""
         cursor = await self.conn.execute("""
-            SELECT user_id, user_name, nickname, interests, learned_facts, interaction_count, last_seen_at
-            FROM UserMemory;
+            SELECT * FROM UserMemory;
         """)
         rows = await cursor.fetchall()
-        user_memories = []
+        memories = []
         for row in rows:
             um = dict(row)
             um['interests'] = json.loads(um.get('interests', '[]'))
             um['learned_facts'] = json.loads(um.get('learned_facts', '{}'))
             um['last_seen_at'] = datetime.fromtimestamp(um['last_seen_at'], tz=timezone.utc) if um.get('last_seen_at') else None
-            user_memories.append(um)
-        return user_memories
+            memories.append(um)
+        return memories
 
     async def upsert_user_memory(self, user_memory: dict[str, Any]) -> None:
-        """Insert or update a user memory (UPSERT)."""
         interests_json = json.dumps(user_memory.get('interests', []))
         learned_facts_json = json.dumps(user_memory.get('learned_facts', {}))
         last_seen = int(user_memory.get('last_seen_at', datetime.now(timezone.utc).timestamp()))
@@ -155,44 +162,33 @@ class SQLiteDAO:
         await self.conn.commit()
 
     async def delete_user_memory(self, user_id: int) -> None:
-        """Delete a user memory by user_id."""
-        await self.conn.execute(
-            "DELETE FROM UserMemory WHERE user_id = ?;", (user_id,)
-        )
+        await self.conn.execute("DELETE FROM UserMemory WHERE user_id = ?;", (user_id,))
         await self.conn.commit()
 
     # ---- ConversationHistory Methods ----
 
     async def threshold_select_conversation_history(self, token_count_threshold: int) -> List[dict[str, Any]]:
-        """Select recent conversation rows until a cumulative token threshold is reached."""
         cursor = await self.conn.execute("""
-            SELECT message_id, user_id, channel_id, sent_at, raw_text, context, token_count, role_id, was_edited, reactions, attachments
-            FROM ConversationHistory
-            ORDER BY sent_at DESC
-            LIMIT 1000;
+            SELECT * FROM ConversationHistory ORDER BY sent_at DESC LIMIT 1000;
         """)
         rows = await cursor.fetchall()
         total_tokens = 0
         safe_rows = []
-
         for row in rows:
             ch = dict(row)
             if total_tokens + (ch.get('token_count') or 0) > token_count_threshold:
                 break
             total_tokens += ch.get('token_count', 0)
-            ch['context'] = json.loads(ch.get('context', '{}'))
-            ch['reactions'] = json.loads(ch.get('reactions', '{}'))
-            ch['attachments'] = json.loads(ch.get('attachments', '{}'))
+            for field in ['context', 'reactions', 'attachments']:
+                ch[field] = json.loads(ch.get(field, '{}'))
             safe_rows.append(ch)
-
-        return safe_rows[::-1]  # return oldest -> newest
+        return safe_rows[::-1]
 
     async def upsert_conversation_history(self, conversation_history: dict[str, Any]) -> None:
-        """Insert or update Conversation History"""
         sent_at = int(conversation_history.get('sent_at', datetime.now(timezone.utc).timestamp()))
         context_json = json.dumps(conversation_history.get('context', {}))
         reactions_json = json.dumps(conversation_history.get('reactions', {}))  
-        attachments_json = json.loads(conversation_history.get('attachments', '{}'))
+        attachments_json = json.dumps(conversation_history.get('attachments', {}))
 
         await self.conn.execute("""
             INSERT INTO ConversationHistory 
@@ -225,23 +221,16 @@ class SQLiteDAO:
         await self.conn.commit()
 
     async def delete_conversation_history(self, message_id: int) -> None:
-        """Delete conversation row by message_id."""
-        await self.conn.execute(
-            "DELETE FROM ConversationHistory WHERE message_id = ?;", (message_id,)
-        )
+        await self.conn.execute("DELETE FROM ConversationHistory WHERE message_id = ?;", (message_id,))
         await self.conn.commit()
         
     async def delete_all_conversation_history(self) -> None:
-        """Delete entirety of conversation history."""
-        await self.conn.execute(
-            "DELETE FROM ConversationHistory;"
-        )
+        await self.conn.execute("DELETE FROM ConversationHistory;")
         await self.conn.commit()
 
     # ---- Cleanup ----
 
     async def close(self) -> None:
-        """Closes SQLite connection."""
         if self.conn:
             await self.conn.close()
             self.conn = None
