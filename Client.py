@@ -32,7 +32,6 @@ def handle_signal(sig, frame):
     """Schedule async shutdown on SIGINT/SIGTERM."""
     sable.close()
     asyncio.get_event_loop().create_task(client.close())
-    exit(0)
 
 # Register signal handlers for Ctrl+C and termination
 for s in (signal.SIGTERM, signal.SIGINT):

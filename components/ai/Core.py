@@ -89,7 +89,7 @@ class AICore:
             if persona:
                 self.persona.update(persona)
             self.user_memory = await self.dao.select_all_user_memories()
-            async with self.clear_conversation_history:
+            async with self.conversation_history_lock:
                 self.conversation_history = await self.dao.threshold_select_conversation_history(
                     self.CONTEXT_TOKENS - self.reserved_tokens)
 

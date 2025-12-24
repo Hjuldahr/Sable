@@ -35,6 +35,8 @@ class SQLiteDAO:
             created_at INTEGER DEFAULT (strftime('%s','now')),
             updated_at INTEGER DEFAULT (strftime('%s','now'))
         );
+        
+        INSERT INTO Persona(id) VALUES(1) ON CONFLICT (id) DO NOTHING;
 
         CREATE TABLE IF NOT EXISTS UserMemory (
             user_id INTEGER PRIMARY KEY,
@@ -187,6 +189,8 @@ class SQLiteDAO:
     async def threshold_select_conversation_history(self, token_count_threshold: int) -> List[dict[str, Any]]:
         cursor = await self.conn.execute("SELECT * FROM ConversationHistory ORDER BY sent_at DESC LIMIT 1000;")
         rows = await cursor.fetchall()
+        if not rows:
+            return []
         total_tokens = 0
         safe_rows = []
         for row in rows:
