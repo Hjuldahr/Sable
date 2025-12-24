@@ -48,7 +48,8 @@ From your development terminal:
 `pip install llama-cpp-python`\
 `pip install discord.py`\
 `pip install dotenv`\
-`pip install markitdown`
+`pip install markitdown`\
+`pip install nltk`
 
 Or install everything at once:
 

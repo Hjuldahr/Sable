@@ -50,6 +50,10 @@ class Moods:
     def ordinals(cls, ns: Iterable[int]) -> list[str]:
         return [cls.ordinal(n) for n in ns]
     
+    @classmethod
+    def neutral_distance(cls, vad: dict[str, float]) -> float:
+        return cls.distance(Moods.VAD[Moods.NEUTRAL], vad)
+    
     @staticmethod
     def distance(vad1: dict[str, float], vad2: dict[str, float]) -> float:
         return math.sqrt(

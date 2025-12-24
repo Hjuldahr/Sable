@@ -32,7 +32,10 @@ class SQLiteDAO:
             arousal REAL DEFAULT 0.5, -- Current Mood
             dominance REAL DEFAULT 0.5, -- Current Mood
             mood_id INT DEFAULT 0, -- ENUM
-            principles TEXT DEFAULT '[]',
+            likes TEXT DEFAULT '[]',
+            dislikes TEXT DEFAULT '[]',
+            interests TEXT DEFAULT '[]',
+            memories TEXT DEFAULT '[]',
             default_response_length INTEGER DEFAULT 255,
             created_at INTEGER DEFAULT (strftime('%s','now')),
             updated_at INTEGER DEFAULT (strftime('%s','now'))
