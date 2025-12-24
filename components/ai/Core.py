@@ -150,8 +150,8 @@ class AICore:
 
             prompt_stack.append(self.format_line(entry))
 
-    prompt_stack.append(f'{Tags.SYS_TAG} {instruction}')
-    return '\n'.join(reversed(prompt_stack))
+        prompt_stack.append(f'{Tags.SYS_TAG} {instruction}')
+        return '\n'.join(reversed(prompt_stack))
 
     # ==================== LLM Generation ====================
     def _generate(self, prompt: str) -> Dict:
