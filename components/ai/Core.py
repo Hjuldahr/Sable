@@ -34,7 +34,7 @@ class AICore:
     Respond politely to rudeness and steer the conversation positively. 
     Show curiosity and playfulness in your replies."""
 
-    def __init__(self, discord_client: discord.Client, ai_user_id: int, ai_user_name='Sable',
+    def __init__(self, discord_client: discord.Client, dao: SQLiteDAO, ai_user_id: int, ai_user_name='Sable',
                  model_path=r'.\model\mistral-7b-instruct-v0.1.Q4_K_M.gguf', n_threads=4):
 
         self.discord_client = discord_client
@@ -48,7 +48,7 @@ class AICore:
             'interests': [],
             'likes': [],
             'dislikes': [],
-            'important': [],
+            'important': [], #NOTE stored but not used in prompt builder (fix)
             'tone_style': 'neutral',
             'conversation_subject': 'general',
             'last_interaction': None,
@@ -57,7 +57,7 @@ class AICore:
         self.conversation_history: List[Dict[str, Any]] = []
         self.user_memory: Dict[int, Dict[str, Any]] = {}
 
-        self.dao = SQLiteDAO()
+        self.dao = dao
         self.md = MarkItDown()
 
         self.llm = Llama(model_path, n_ctx=self.CONTEXT_TOKENS, n_threads=n_threads, n_gpu_layers=32, verbose=False)
@@ -85,6 +85,7 @@ class AICore:
         """Initialize DAO and load memory/persona."""
         if self.dao:
             await self.dao.init()
+            """
             persona = await self.dao.select_persona()
             if persona:
                 self.persona.update(persona)
@@ -92,6 +93,7 @@ class AICore:
             async with self.conversation_history_lock:
                 self.conversation_history = await self.dao.threshold_select_conversation_history(
                     self.CONTEXT_TOKENS - self.reserved_tokens)
+            """
 
     # ==================== Conversation History ====================
     async def add_to_conversation_history(self, entry: Dict[str, Any]):
@@ -479,7 +481,7 @@ class AICore:
             'token_count': token_count,
             'role_id': Tags.USER,
             'sent_at': message.created_at.timestamp(),
-            'context': {},
+            'context': {}, #TODO add logic for or remove
             'was_edited': int(message.edited_at is not None),
             'reactions': reactions,
             'attachments': attachments

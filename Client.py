@@ -6,27 +6,67 @@ from dotenv import load_dotenv
 from llama_cpp import Path
 
 from components.ai.core import AICore
+from components.db.sqlite_dao import SQLiteDAO
 
+# ---- env ----
 path = Path(__file__).resolve().parents[0] / '.env'
 load_dotenv(path)
 
+# ---- intents ----
 intents = discord.Intents.default()
 intents.message_content = True
+intents.guilds = True 
+
+# ---- client ----
 client = discord.Client(intents=intents)
+bot = discord.Bot()
 
+# ---- AI core ----
 ai_user_id = int(os.getenv("BOT_ID"))
-sable = AICore(client, ai_user_id, 'Sable')
+dao = SQLiteDAO() # Defined here to permit direct queries by client 
+sable = AICore(client, dao, ai_user_id, 'Sable')
 
-# --- Async startup task ---
-async def startup():
-    """Initialize async resources before bot starts."""
-    await sable.init() 
-    print("Discord Client Starting Up")
+@client.event
+async def on_guild_join(guild: discord.Guild):
+    # This function runs when the bot joins a new guild
+    print(f'Sable joined a new guild: {guild.name} [ID: {guild.id}]')
 
-# --- Graceful shutdown ---
-async def shutdown():
-    """Placeholder"""
-    print("Discord Client Shutting Down")
+    try:
+        await guild.owner.send(f'Heya {guild.owner.nick}! Thank you for inviting me to {guild.name}!')
+    except discord.Forbidden | AttributeError:
+        print(f"I could not find the owner of {guild.name} [ID: {guild.id}]")
+
+    # Attempt to message default channel
+    if guild.system_channel:
+        channel = guild.system_channel
+        if channel.permissions_for(guild.me).send_messages:
+            print(f"I landed on the default text channel {channel.name} [ID: {channel.id}]")
+            #await channel.send('Hi everyone! I hope we can be friends!')
+            await dao.upsert_guild(guild)
+
+    # Fall back: Scan for first open text channel (less safe as it may be an improper location for greetings)
+    else:
+        channels = sorted(guild.text_channels, key=lambda x: x.position)
+        for channel in channels:
+            if channel.permissions_for(guild.me).send_messages:
+                print(f"I landed on the text channel {channel.name} [ID: {channel.id}]")
+                #await channel.send('Hello everyone! I have arrived!')
+                await dao.upsert_channel(channel)
+                
+                break
+
+@client.event
+async def on_guild_channel_update(before, after):
+    if isinstance(after, discord.TextChannel):
+        me = after.guild.me
+        current_perms = after.permissions_for(me)
+        was_perms = before.permissions_for(me)
+
+        # Detect if view_channel was just granted
+        if current_perms.view_channel and not was_perms.view_channel:
+            print(f"I was granted view permission for text channel {after.name} [ID: {after.id}]")
+            await after.send('Thank you for letting me join yall here!')
+            # Action to take when permission is gained
 
 def handle_signal(sig, frame):
     """Schedule async shutdown on SIGINT/SIGTERM."""
@@ -41,8 +81,6 @@ for s in (signal.SIGTERM, signal.SIGINT):
 @client.event
 async def on_ready():
     print(f'Logged in as {client.user}')
-    # Ensure EOS is initialized
-    await startup()
 
 @client.event
 async def on_message(message: discord.Message):
@@ -52,7 +90,6 @@ async def on_message(message: discord.Message):
     text = message.content.strip()
     if not text:
         return
-
     await sable.listen(message)
 
     # Check if the bot was mentioned
@@ -71,4 +108,5 @@ if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError("DISCORD_BOT_TOKEN not found in .env")
 
+    asyncio.run(sable.init())
     client.run(TOKEN)

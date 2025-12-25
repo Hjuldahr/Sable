@@ -1,77 +1,36 @@
 # sqlite_dao
-from pathlib import Path
-import json
+from collections import deque
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+import json
+from pathlib import Path
+from typing import Any, Optional
 import aiosqlite
-
-from components.ai.moods import Moods
-
+import discord
 
 class SQLiteDAO:
     def __init__(self):
-        self.db_path = Path(__file__).resolve().parents[2] / 'data' / 'database.db'
-        self.conn: Optional[aiosqlite.Connection] = None
+        self.path_root = Path(__file__).resolve().parents[2]
+        self.db_path = self.path_root / 'data' / 'database.db'
+        self.attachments_path = self.path_root / 'data' / 'attachments'
+        self.setup_script_path = self.path_root / 'setup.sqlite'
 
     async def init(self):
-        self.conn = await aiosqlite.connect(self.db_path)
-        self.conn.row_factory = aiosqlite.Row
-
-        await self.conn.executescript("""
-        CREATE TABLE IF NOT EXISTS Persona (
-            id INTEGER PRIMARY KEY CHECK(id = 1),
-            user_id INTEGER DEFAULT 1452493514050113781,
-            AI_name TEXT DEFAULT 'Sable',
-            personality_traits TEXT DEFAULT '{}',
-            valence REAL DEFAULT 0.5,
-            arousal REAL DEFAULT 0.5,
-            dominance REAL DEFAULT 0.5,
-            mood_id INT DEFAULT 0,
-            likes TEXT DEFAULT '[]',
-            dislikes TEXT DEFAULT '[]',
-            interests TEXT DEFAULT '[]',
-            memories TEXT DEFAULT '[]',
-            default_response_length INTEGER DEFAULT 255,
-            created_at INTEGER DEFAULT (strftime('%s','now')),
-            updated_at INTEGER DEFAULT (strftime('%s','now'))
-        );
-        
-        INSERT INTO Persona(id) VALUES(1) ON CONFLICT (id) DO NOTHING;
-
-        CREATE TABLE IF NOT EXISTS UserMemory (
-            user_id INTEGER PRIMARY KEY,
-            user_name TEXT,
-            nickname TEXT,
-            interests TEXT DEFAULT '[]',
-            learned_facts TEXT DEFAULT '{}',
-            interaction_count INTEGER DEFAULT 0,
-            last_seen_at INTEGER DEFAULT (strftime('%s','now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS ConversationHistory (
-            message_id INTEGER PRIMARY KEY,
-            user_id INTEGER,
-            channel_id INTEGER,
-            sent_at INTEGER,
-            raw_text TEXT,
-            context TEXT DEFAULT '{}',
-            token_count INTEGER,
-            role_id INTEGER,
-            was_edited INTEGER DEFAULT 0,
-            reactions TEXT DEFAULT '{}',
-            attachments TEXT DEFAULT '{}'
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_history_user_id ON ConversationHistory(user_id);
-        CREATE INDEX IF NOT EXISTS idx_history_channel_id ON ConversationHistory(channel_id);
-        CREATE INDEX IF NOT EXISTS idx_user_last_seen ON UserMemory(last_seen_at);
-        """)
-        await self.conn.commit()
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                if self.setup_script_path.exists():
+                    setup_script = self.setup_script_path.read_text()
+                    if setup_script.strip():
+                        await db.executescript(setup_script)
+                        await db.commit()
+            except aiosqlite.Error | OSError as err:
+                await db.rollback()
+                print(f"An error occurred during schema setup, transaction rolled back: {err}")
 
     # ---- Helper Methods ----
 
     @staticmethod
     def _json_load(value: str, default: Any) -> Any:
+        """Parse JSON string, return `default` if None/invalid."""
         try:
             return json.loads(value) if value else default
         except json.JSONDecodeError:
@@ -79,177 +38,155 @@ class SQLiteDAO:
 
     @staticmethod
     def _json_dump(value: Any) -> str:
-        return json.dumps(value)
+        """Serialize Python object to JSON string, empty if None."""
+        return json.dumps(value) if value is not None else ""
 
     @staticmethod
-    def _to_ts(dt: Optional[datetime]) -> int:
-        return int(dt.timestamp()) if dt else int(datetime.now(timezone.utc).timestamp())
+    def _to_ts(value: datetime | None, required: bool = False) -> int | None:
+        """Convert datetime to POSIX timestamp; use current UTC if required."""
+        dt = value or (datetime.now(timezone.utc) if required else None)
+        return int(dt.timestamp()) if dt else None
 
     @staticmethod
-    def _from_ts(ts: Optional[int]) -> Optional[datetime]:
-        return datetime.fromtimestamp(ts, tz=timezone.utc) if ts else None
+    def _from_ts(value: int | None, required: bool = False) -> datetime | None:
+        """Convert POSIX timestamp to UTC datetime; use current UTC if required."""
+        return datetime.fromtimestamp(value, tz=timezone.utc) if value is not None else (datetime.now(timezone.utc) if required else None)
 
-    # ---- Persona Methods ----
+    @staticmethod
+    def _to_bool(value: int) -> bool:
+        """Convert int to bool (0 -> False, others -> True)."""
+        return bool(value)
 
-    async def select_persona(self) -> Optional[dict[str, Any]]:
-        cursor = await self.conn.execute("SELECT * FROM Persona;")
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        persona = dict(row)
-        for field, default in [('personality_traits', {}), ('likes', []), ('dislikes', []),
-                               ('interests', []), ('memories', [])]:
-            persona[field] = self._json_load(persona.get(field), default)
-        persona['created_at'] = self._from_ts(persona.get('created_at'))
-        persona['updated_at'] = self._from_ts(persona.get('updated_at'))
-        return persona
+    @staticmethod
+    def _from_bool(value: bool) -> int:
+        """Convert bool to int (False -> 0, True -> 1)."""
+        return int(value)
 
-    async def update_persona(self, persona: dict[str, Any]) -> None:
-        fields = ['personality_traits', 'likes', 'dislikes', 'interests', 'memories']
-        json_fields = {f: self._json_dump(persona.get(f, {} if f == 'personality_traits' else [])) for f in fields}
-        updated_at = self._to_ts(None)
+    # ---- Discord Methods ----
+    async def upsert_guild(self, guild: discord.Guild):
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                await self.conn.execute(
+                    """INSERT INTO DiscordServers(guild_id, guild_name, guild_description, created_at) 
+                    VALUES (?, ?, ?, ?) 
+                    ON CONFLICT(guild_id) DO UPDATE SET
+                        guild_name = EXCLUDED.guild_name,
+                        guild_description = EXCLUDED.guild_description;
+                    """,
+                    (guild.id, guild.name, guild.description, guild.created_at)
+                )
+                await db.commit()
+                
+            except aiosqlite.Error as err:
+                await db.rollback()
+                print(f"An error occurred, transaction rolled back: {err}")
+                
+    async def upsert_text_channel(self, channel: discord.TextChannel):
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                is_nsfw = self._from_bool(channel.nsfw)
+                await self.conn.execute(
+                    """INSERT INTO DiscordTextChannels(channel_id, guild_id, channel_name, channel_topic, is_nsfw, created_at) 
+                    VALUES (?, ?, ?, ?, ?, ?) 
+                    ON CONFLICT (channel_id) DO UPDATE SET
+                        channel_name = EXCLUDED.channel_name,
+                        channel_topic = EXCLUDED.channel_topic,
+                        is_nsfw = EXCLUDED.is_nsfw;
+                    """,
+                    (channel.id, channel.guild.id, channel.name, channel.topic, is_nsfw, channel.created_at)
+                )
+                
+                await db.commit()
+                
+            except aiosqlite.Error as err:
+                await db.rollback()
+                print(f"An error occurred, transaction rolled back: {err}")
 
-        await self.conn.execute("""
-            UPDATE Persona
-            SET AI_name = ?,
-                personality_traits = ?,
-                valence = ?,
-                arousal = ?,
-                dominance = ?,
-                mood_id = ?,
-                likes = ?,
-                dislikes = ?,
-                interests = ?,
-                memories = ?,
-                default_response_length = ?,
-                updated_at = ?
-            WHERE id = 1;
-        """, (
-            persona.get('AI_name', 'Sable'),
-            json_fields['personality_traits'],
-            persona.get('valence', 0.5),
-            persona.get('arousal', 0.5),
-            persona.get('dominance', 0.5),
-            persona.get('mood_id', Moods.NEUTRAL),
-            json_fields['likes'],
-            json_fields['dislikes'],
-            json_fields['interests'],
-            json_fields['memories'],
-            persona.get('default_response_length', 255),
-            updated_at
-        ))
-        await self.conn.commit()
+    async def upsert_attachment(self, message_id: int, attachment: discord.Attachment):
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                local_path = self.attachments_path / attachment.filename
+                # Skip if already on disk 
+                if local_path.exists(): 
+                    return
+                
+                # Ensure directory exists
+                self.attachments_path.mkdir(parents=True, exist_ok=True)
 
-    # ---- UserMemory Methods ----
+                # Save the file
+                save_size = await attachment.save(use_cached=True)
+                # Skip if zero bytes were downloaded (file was empty or failed to download)
+                if save_size <= 0: 
+                    return
 
-    async def select_all_user_memories(self) -> List[dict[str, Any]]:
-        cursor = await self.conn.execute("SELECT * FROM UserMemory;")
-        rows = await cursor.fetchall()
-        memories = []
-        for row in rows:
-            um = dict(row)
-            um['interests'] = self._json_load(um.get('interests'), [])
-            um['learned_facts'] = self._json_load(um.get('learned_facts'), {})
-            um['last_seen_at'] = self._from_ts(um.get('last_seen_at'))
-            memories.append(um)
-        return memories
+                # Only update DB if save succeeds
+                await self.conn.execute(
+                    """INSERT INTO DiscordAttachments(
+                        attachment_id, message_id, source_url, source_proxy_url, local_path,
+                        title, content_type, file_name, description, is_spoiler, size
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (attachment_id) DO UPDATE SET
+                        source_url = EXCLUDED.source_url,
+                        source_proxy_url = EXCLUDED.source_proxy_url,
+                        local_path = EXCLUDED.local_path,
+                        title = EXCLUDED.title,
+                        content_type = EXCLUDED.content_type,
+                        file_name = EXCLUDED.file_name,
+                        description = EXCLUDED.description,
+                        is_spoiler = EXCLUDED.is_spoiler,
+                        size = EXCLUDED.size;
+                    """,
+                    (
+                        attachment.id,
+                        message_id,
+                        attachment.url,
+                        attachment.proxy_url,
+                        str(local_path),
+                        attachment.title,
+                        attachment.content_type,
+                        attachment.filename,
+                        attachment.description,
+                        attachment.is_spoiler,
+                        attachment.size
+                    )
+                )
+                await db.commit()
+                
+            except aiosqlite.Error as err:
+                await db.rollback()
+                print(f"An error occurred, transaction rolled back: {err}")
 
-    async def upsert_user_memory(self, user_memory: dict[str, Any]) -> None:
-        interests_json = self._json_dump(user_memory.get('interests', []))
-        learned_facts_json = self._json_dump(user_memory.get('learned_facts', {}))
-        last_seen = self._to_ts(user_memory.get('last_seen_at'))
-
-        await self.conn.execute("""
-            INSERT INTO UserMemory (user_id, user_name, nickname, interests, learned_facts, interaction_count, last_seen_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                user_name = excluded.user_name,
-                nickname = excluded.nickname,
-                interests = excluded.interests,
-                learned_facts = excluded.learned_facts,
-                interaction_count = excluded.interaction_count,
-                last_seen_at = excluded.last_seen_at;
-        """, (
-            user_memory['user_id'],
-            user_memory.get('user_name', ''),
-            user_memory.get('nickname', ''),
-            interests_json,
-            learned_facts_json,
-            user_memory.get('interaction_count', 0),
-            last_seen
-        ))
-        await self.conn.commit()
-
-    async def delete_user_memory(self, user_id: int) -> None:
-        await self.conn.execute("DELETE FROM UserMemory WHERE user_id = ?;", (user_id,))
-        await self.conn.commit()
-
-    # ---- ConversationHistory Methods ----
-
-    async def threshold_select_conversation_history(self, token_count_threshold: int) -> List[dict[str, Any]]:
-        cursor = await self.conn.execute("SELECT * FROM ConversationHistory ORDER BY sent_at DESC LIMIT 1000;")
-        rows = await cursor.fetchall()
-        if not rows:
-            return []
-        total_tokens = 0
-        safe_rows = []
-        for row in rows:
-            ch = dict(row)
-            if total_tokens + (ch.get('token_count') or 0) > token_count_threshold:
-                break
-            total_tokens += ch.get('token_count', 0)
-            for field in ['context', 'reactions', 'attachments']:
-                ch[field] = self._json_load(ch.get(field), {})
-            safe_rows.append(ch)
-        return safe_rows[::-1]
-
-    async def upsert_conversation_history(self, conversation_history: dict[str, Any]) -> None:
-        sent_at = self._to_ts(conversation_history.get('sent_at'))
-        context_json = self._json_dump(conversation_history.get('context', {}))
-        reactions_json = self._json_dump(conversation_history.get('reactions', {}))
-        attachments_json = self._json_dump(conversation_history.get('attachments', {}))
-
-        await self.conn.execute("""
-            INSERT INTO ConversationHistory 
-                (message_id, user_id, channel_id, sent_at, raw_text, context, token_count, role_id, was_edited, reactions, attachments)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(message_id) DO UPDATE SET
-                user_id = excluded.user_id,
-                channel_id = excluded.channel_id,
-                sent_at = excluded.sent_at,
-                raw_text = excluded.raw_text,
-                context = excluded.context,
-                token_count = excluded.token_count,
-                role_id = excluded.role_id,
-                was_edited = excluded.was_edited,
-                reactions = excluded.reactions,
-                attachments = excluded.attachments;
-        """, (
-            conversation_history['message_id'],
-            conversation_history['user_id'],
-            conversation_history['channel_id'],
-            sent_at,
-            conversation_history['raw_text'],
-            context_json,
-            conversation_history.get('token_count', 0),
-            conversation_history['role_id'],
-            conversation_history.get('was_edited', 0),
-            reactions_json,
-            attachments_json
-        ))
-        await self.conn.commit()
-
-    async def delete_conversation_history(self, message_id: int) -> None:
-        await self.conn.execute("DELETE FROM ConversationHistory WHERE message_id = ?;", (message_id,))
-        await self.conn.commit()
-
-    async def delete_all_conversation_history(self) -> None:
-        await self.conn.execute("DELETE FROM ConversationHistory;")
-        await self.conn.commit()
-
-    # ---- Cleanup ----
-
-    async def close(self) -> None:
-        if self.conn:
-            await self.conn.close()
-            self.conn = None
+    async def upsert_message(self, message: discord.Message):
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                reactions = self._json_dump([{'emoji': str(r.emoji), 'count': r.count, 'me': r.me} for r in message.reactions])
+                references_message_id = message.reference.message_id if message.reference else None
+                created_at = self._to_ts(message.created_at)
+                edited_at = self._to_ts(message.edited_at)
+                await self.conn.execute(
+                    """INSERT INTO DiscordMessage(message_id, references_message_id, user_id, channel_id, text, reactions, created_at, edited_at) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?) 
+                    ON CONFLICT (message_id) DO UPDATE SET
+                        references_message_id = EXCLUDED.references_message_id, -- may have since been deleted
+                        text = EXCLUDED.text,
+                        reactions = EXCLUDED.reactions,
+                        edited_at = EXCLUDED.edited_at;
+                    """,
+                    (message.id, 
+                    references_message_id, 
+                    message.author.id, 
+                    message.channel.id, 
+                    message.content, 
+                    reactions,
+                    created_at,
+                    edited_at)
+                )       
+                await db.commit()
+                
+            except aiosqlite.Error as err:
+                await db.rollback()
+                print(f"An error occurred, transaction rolled back: {err}")
+        
+        for attachment in message.attachments:
+            if not attachment.ephemeral: # skip if transient
+                await self.upsert_attachment(message.id, attachment)

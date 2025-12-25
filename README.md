@@ -45,6 +45,7 @@ Download and install **Python 3.12.\***
 From your development terminal:
 
 `pip install aiosqlite`\
+`pip install aiofiles`\
 `pip install llama-cpp-python`\
 `pip install discord.py`\
 `pip install dotenv`\
