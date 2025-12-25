@@ -29,9 +29,12 @@ sable = AICore(client, dao, ai_user_id, 'Sable')
 @client.event
 async def on_guild_join(guild: discord.Guild):
     # This function runs when the bot joins a new guild
-    print(f'Sable joined a new guild: {guild.name} [ID: {guild.id}]')
+    await dao.upsert_guild(guild)
+    print(f'I joined a new guild: {guild.name} [ID: {guild.id}]')
 
+    # UNDECIDED Remove if more annoying than endearing
     try:
+        # TODO replace with generated salutation
         await guild.owner.send(f'Heya {guild.owner.nick}! Thank you for inviting me to {guild.name}!')
     except discord.Forbidden | AttributeError:
         print(f"I could not find the owner of {guild.name} [ID: {guild.id}]")
@@ -40,20 +43,44 @@ async def on_guild_join(guild: discord.Guild):
     if guild.system_channel:
         channel = guild.system_channel
         if channel.permissions_for(guild.me).send_messages:
-            print(f"I landed on the default text channel {channel.name} [ID: {channel.id}]")
-            #await channel.send('Hi everyone! I hope we can be friends!')
-            await dao.upsert_guild(guild)
+            await dao.upsert_channel(channel)
+            print(f"I announced my arrival at {guild.name} via '{channel.name}' [ID: {channel.id}]")
+            # TODO replace with generated salutation
+            await channel.send('Hi everyone! I hope we can be friends!')
+            #await dao.upsert_guild(guild)
 
     # Fall back: Scan for first open text channel (less safe as it may be an improper location for greetings)
     else:
         channels = sorted(guild.text_channels, key=lambda x: x.position)
         for channel in channels:
             if channel.permissions_for(guild.me).send_messages:
-                print(f"I landed on the text channel {channel.name} [ID: {channel.id}]")
-                #await channel.send('Hello everyone! I have arrived!')
                 await dao.upsert_channel(channel)
-                
+                print(f"I announced my arrival at {guild.name} via '{channel.name}' [ID: {channel.id}]")
+                # TODO replace with generated salutation
+                await channel.send('Hello everyone! I have arrived!')
                 break
+
+@client.event
+async def on_guild_remove(guild: discord.Guild):
+    # Attempt to message default channel
+    if guild.system_channel:
+        channel = guild.system_channel
+        if channel.permissions_for(guild.me).send_messages:
+            # TODO replace with generated goodbye
+            print(f"I announced my departure from {guild.name} via '{channel.name}' [ID: {channel.id}]")
+            await channel.send('I am sorry if I had done something wrong. I hope I can come back in the future. But until then goodbye everyone!')
+
+    # Fall back: Scan for first open text channel (less safe as it may be an improper location for greetings)
+    else:
+        channels = sorted(guild.text_channels, key=lambda x: x.position)
+        for channel in channels:
+            if channel.permissions_for(guild.me).send_messages:
+                print(f"I announced my departure from {guild.name} via '{channel.name}' [ID: {channel.id}]")
+                # TODO replace with generated goodbye
+                await channel.send('I am sorry if I had done something wrong. I hope I can come back in the future. But until then goodbye everyone!')
+                break
+            
+    await dao.remove_guild(guild.id)
 
 @client.event
 async def on_guild_channel_update(before, after):
@@ -80,7 +107,7 @@ for s in (signal.SIGTERM, signal.SIGINT):
 # --- Discord events ---
 @client.event
 async def on_ready():
-    print(f'Logged in as {client.user}')
+    print(f'I logged in as [Client: {client.user}]')
 
 @client.event
 async def on_message(message: discord.Message):

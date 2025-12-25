@@ -1,6 +1,4 @@
--- ----------------------------
 -- Layer 1: Immutable Event Log (Discord / conversation)
--- ----------------------------
 
 CREATE TABLE IF NOT EXISTS DiscordGuilds (
     guild_id INTEGER PRIMARY KEY,
@@ -47,16 +45,14 @@ CREATE TABLE IF NOT EXISTS DiscordAttachments (
     FOREIGN KEY (message_id) REFERENCES DiscordMessage(message_id)
 );
 
--- ----------------------------
 -- Layer 2: Long-term Identity / Persistent Memory
--- ----------------------------
 
 CREATE TABLE IF NOT EXISTS Persona (
     id INTEGER PRIMARY KEY CHECK(id = 1),
     user_id INTEGER DEFAULT 1452493514050113781,
     ai_name TEXT DEFAULT 'Sable',
     personality_traits TEXT DEFAULT '{}',   -- JSON blob
-    last_interaction INTEGER DEFAULT (strftime('%s','now')),
+    updated_on INTEGER DEFAULT (strftime('%s','now')),
     subject_history TEXT DEFAULT '[]'       -- JSON blob of long-term topics
 );
 
@@ -70,9 +66,7 @@ CREATE TABLE IF NOT EXISTS UserMemory (
     last_seen_at INTEGER DEFAULT (strftime('%s','now'))
 );
 
--- ----------------------------
 -- Layer 3: Transient / Runtime AI State
--- ----------------------------
 
 CREATE TABLE IF NOT EXISTS AIStateSnapshot (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,3 +91,9 @@ CREATE TABLE IF NOT EXISTS UserMemoryTransient (
     category TEXT,           -- e.g., like, dislike, learned fact
     added_on INTEGER DEFAULT (strftime('%s','now'))
 );
+
+-- Indexing
+
+CREATE INDEX IF NOT EXISTS idx_DiscordMessage_channel ON DiscordMessage(channel_id);
+CREATE INDEX IF NOT EXISTS idx_DiscordMessage_user ON DiscordMessage(user_id);
+CREATE INDEX IF NOT EXISTS idx_DiscordAttachments_message ON DiscordAttachments(message_id);
