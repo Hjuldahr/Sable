@@ -1,4 +1,4 @@
-class Langauge:
+class Language:
     POSITIVE_WORDS = {"good", "great", "awesome", "happy", "fun", "love", "excited", "fantastic", "amazing"}
     NEGATIVE_WORDS = {"bad", "terrible", "sad", "angry", "hate", "annoyed", "frustrated", "boring", "awful"}
     HIGH_AROUSAL_WORDS = {"wow", "amazing", "excited", "urgent", "surprise"}

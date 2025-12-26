@@ -22,9 +22,9 @@ client = discord.Client(intents=intents)
 bot = discord.Bot()
 
 # ---- AI core ----
-ai_user_id = int(os.getenv("BOT_ID"))
-dao = SQLiteDAO() # Defined here to permit direct queries by client 
-sable = AICore(client, dao, ai_user_id, 'Sable')
+ai_user_id = int(os.getenv("BOT_ID")) 
+sable = AICore(client, ai_user_id, 'Sable')
+dao = sable.dao
 
 @client.event
 async def on_guild_join(guild: discord.Guild):
@@ -134,6 +134,5 @@ if __name__ == "__main__":
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")
     if not TOKEN:
         raise RuntimeError("DISCORD_BOT_TOKEN not found in .env")
-
-    asyncio.run(sable.init())
+    asyncio.run(sable.runtime_setup())
     client.run(TOKEN)

@@ -50,7 +50,8 @@ From your development terminal:
 `pip install discord.py`\
 `pip install dotenv`\
 `pip install markitdown`\
-`pip install nltk`
+`pip install nltk`\
+`pip install urlextract`
 
 Or install everything at once:
 

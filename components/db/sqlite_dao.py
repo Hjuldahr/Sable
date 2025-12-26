@@ -1,5 +1,4 @@
 # sqlite_dao_refactor.py
-from collections import deque
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -15,7 +14,7 @@ class SQLiteDAO:
         self.attachments_path = self.path_root / 'data' / 'attachments'
         self.setup_script_path = self.path_root / 'setup.sqlite'
 
-    async def init(self):
+    async def run_setup_script(self):
         async with aiosqlite.connect(self.db_path) as db:
             try:
                 if self.setup_script_path.exists():
@@ -218,13 +217,6 @@ class SQLiteDAO:
     # --- Attachments ---
     async def upsert_attachment(self, db: aiosqlite.Connection, message_id: int, attachment: discord.Attachment):
         try:
-            path = self.attachments_path / attachment.filename
-            if path.exists():
-                return
-            self.attachments_path.mkdir(parents=True, exist_ok=True)
-            size = await attachment.save(use_cached=True)
-            if size <= 0:
-                return
             await db.execute(
                 """INSERT INTO DiscordAttachments(attachment_id, message_id, source_url, source_proxy_url, local_path, title, content_type, file_name, description, is_spoiler, size)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
