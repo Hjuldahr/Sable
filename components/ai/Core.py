@@ -4,11 +4,13 @@ from typing import Any
 import discord
 from llama_cpp import Llama
 
-from components.ai.moods import Moods
-
 from .discord_utilities import DiscordUtilities
 from .nlp_utilities import NLPUtilities
+from .llm_utilities import LLMUtilities
+
 from .tags import Tags
+from .moods import Moods
+
 from db.sqlite_dao import SQLiteDAO
 
 class AICore:

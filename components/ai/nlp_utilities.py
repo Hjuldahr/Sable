@@ -43,7 +43,10 @@ class NLPUtilities:
             nltk.download("stopwords", quiet=True)
         self.nltk_stop_words = set(nltk.corpus.stopwords.words("english"))
         
-        self.executor = ThreadPoolExecutor(max_workers=n_threads)
+        self.executor = ThreadPoolExecutor(
+            max_workers=n_threads, 
+            thread_name_prefix='sable_nlp'
+        )
 
     # ---------- Internal helpers ----------
 
@@ -125,7 +128,8 @@ class NLPUtilities:
         return self._extract_content(message, self.FIND_PASSIONS_REGEX)
     
     async def extract_all(self, message: discord.Message) -> dict[str, list[str]]:
-        return await asyncio.get_running_loop().run_in_executor(
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
             self.executor,
             self._extract_all_sync,
             message

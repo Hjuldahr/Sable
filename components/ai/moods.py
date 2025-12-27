@@ -8,9 +8,9 @@ class VAD:
     AROUSAL_CATEGORY = 'arousal'
     DOMINANCE_CATEGORY = 'dominance'
     ATTRIBUTE_CATEGORIES = (VALENCE_CATEGORY, AROUSAL_CATEGORY , DOMINANCE_CATEGORY)
-    _LOW = -1.0
-    _HIGH = 1.0
-    _MAX_MAGNITUDE = sqrt(3)
+    LOW = -1.0
+    HIGH = 1.0
+    MAX_MAGNITUDE = sqrt(3)
     
     def __init__(self, category_id:int, valence:float=0.0, arousal:float=0.0, dominance:float=0.0):
         self.category_id = category_id

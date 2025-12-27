@@ -1,4 +1,5 @@
 # sqlite_dao_refactor.py
+import asyncio
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -8,17 +9,17 @@ import aiosqlite
 import discord
 
 class SQLiteDAO:
+    PATH_ROOT = Path(__file__).resolve().parents[2]
+    MODEL_PATH = PATH_ROOT / 'model' / 'mistral-7b-instruct-v0.1.Q4_K_M.gguf'
+
     def __init__(self):
-        self.path_root = Path(__file__).resolve().parents[2]
-        self.db_path = self.path_root / 'data' / 'database.db'
-        self.attachments_path = self.path_root / 'data' / 'attachments'
-        self.setup_script_path = self.path_root / 'setup.sqlite'
+        asyncio.run(self.run_setup_script())
 
     async def run_setup_script(self):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
-                if self.setup_script_path.exists():
-                    script = self.setup_script_path.read_text()
+                if self.SETUP_SCRIPT_PATH.exists():
+                    script = self.SETUP_SCRIPT_PATH.read_text()
                     if script.strip():
                         await db.executescript(script)
                         await db.commit()
@@ -57,7 +58,7 @@ class SQLiteDAO:
 
     # --- Guilds ---
     async def upsert_guild(self, guild: discord.Guild):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute(
                     """INSERT INTO DiscordGuilds(guild_id, guild_name, guild_description, created_at)
@@ -73,7 +74,7 @@ class SQLiteDAO:
                 print(f"Upsert guild failed: {err}")
 
     async def select_guild(self, guild_id: int) -> dict[str, Any] | None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             db.row_factory = sqlite3.Row
             try:
                 async with db.execute(
@@ -91,7 +92,7 @@ class SQLiteDAO:
                 return None
 
     async def select_all_guilds(self) -> list[dict[str, Any]]:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             db.row_factory = sqlite3.Row
             try:
                 async with db.execute("SELECT * FROM DiscordGuilds;") as cursor:
@@ -102,7 +103,7 @@ class SQLiteDAO:
                 return []
 
     async def delete_guild(self, guild_id: int):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute("DELETE FROM DiscordGuilds WHERE guild_id=?;", (guild_id,))
                 await db.commit()
@@ -112,7 +113,7 @@ class SQLiteDAO:
 
     # --- Text Channels ---
     async def upsert_text_channel(self, channel: discord.TextChannel):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute(
                     """INSERT INTO DiscordTextChannels(channel_id, guild_id, channel_name, channel_topic, is_nsfw, created_at)
@@ -129,7 +130,7 @@ class SQLiteDAO:
                 print(f"Upsert text channel failed: {err}")
 
     async def select_text_channel(self, guild_id: int, channel_id: int) -> dict[str, Any] | None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             db.row_factory = sqlite3.Row
             try:
                 async with db.execute(
@@ -148,7 +149,7 @@ class SQLiteDAO:
                 return None
 
     async def select_all_text_channels(self, guild_id: int) -> list[dict[str, Any]]:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             db.row_factory = sqlite3.Row
             try:
                 async with db.execute("SELECT * FROM DiscordTextChannels WHERE guild_id=?;", (guild_id,)) as cursor:
@@ -159,7 +160,7 @@ class SQLiteDAO:
                 return []
 
     async def delete_text_channel(self, guild_id: int, channel_id: int):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute("DELETE FROM DiscordTextChannels WHERE guild_id=? AND channel_id=?;", (guild_id, channel_id))
                 await db.commit()
@@ -169,7 +170,7 @@ class SQLiteDAO:
 
     # --- Messages ---
     async def upsert_message(self, message: discord.Message):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 reactions = self._json_dump([{'emoji': str(r.emoji), 'count': r.count, 'me': r.me} for r in message.reactions])
                 await db.execute(
@@ -193,7 +194,7 @@ class SQLiteDAO:
                 print(f"Upsert message failed: {err}")
 
     async def select_message(self, message_id: int) -> dict[str, Any] | None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             db.row_factory = sqlite3.Row
             try:
                 async with db.execute("SELECT * FROM DiscordMessage WHERE message_id=?;", (message_id,)) as cursor:
@@ -206,7 +207,7 @@ class SQLiteDAO:
                 return None
 
     async def delete_message(self, message_id: int):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute("DELETE FROM DiscordMessage WHERE message_id=?;", (message_id,))
                 await db.commit()
@@ -238,7 +239,7 @@ class SQLiteDAO:
             print(f"Upsert attachment failed: {err}")
 
     async def select_attachment(self, attachment_id: int) -> dict[str, Any] | None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             db.row_factory = sqlite3.Row
             try:
                 async with db.execute("SELECT * FROM DiscordAttachments WHERE attachment_id=?;", (attachment_id,)) as cursor:
@@ -249,7 +250,7 @@ class SQLiteDAO:
                 return None
 
     async def delete_attachment(self, attachment_id: int):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute("DELETE FROM DiscordAttachments WHERE attachment_id=?;", (attachment_id,))
                 await db.commit()
@@ -259,7 +260,7 @@ class SQLiteDAO:
 
     # --- User Memory ---
     async def upsert_user_memory(self, memory: dict[str, Any]):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute(
                     """INSERT INTO UserMemory(user_id, user_name, nickname, interaction_count, last_seen_at)
@@ -276,7 +277,7 @@ class SQLiteDAO:
                 print(f"Upsert user memory failed: {err}")
 
     async def select_user_memory(self, user_id: int) -> dict[str, Any] | None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             db.row_factory = sqlite3.Row
             try:
                 async with db.execute("SELECT * FROM UserMemory WHERE user_id=?;", (user_id,)) as cursor:
@@ -287,7 +288,7 @@ class SQLiteDAO:
                 return None
 
     async def delete_user_memory(self, user_id: int):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute("DELETE FROM UserMemory WHERE user_id=?;", (user_id,))
                 await db.commit()
@@ -298,7 +299,7 @@ class SQLiteDAO:
     # --- Persona ---
     async def update_persona(self, persona: dict[str, Any]):
         """Update main persona record (id=1 assumed)."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 personality_json = self._json_dump(persona['personality_traits'])
                 subject_history_json = self._json_dump(persona['subject_history'])
@@ -314,7 +315,7 @@ class SQLiteDAO:
                 print(f"Update persona failed: {err}")
 
     async def select_persona(self) -> dict[str, Any] | None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             db.row_factory = sqlite3.Row
             try:
                 async with db.execute("SELECT * FROM Persona WHERE id=1;") as cursor:
@@ -331,7 +332,7 @@ class SQLiteDAO:
 
     # --- Persona Transient ---
     async def insert_persona_transient(self, entry: dict[str, Any]):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute(
                     "INSERT INTO PersonaTransient(entry, category) VALUES (?, ?);",
@@ -343,7 +344,7 @@ class SQLiteDAO:
                 print(f"Insert persona transient failed: {err}")
 
     async def select_persona_transient(self, category: str | None = None) -> list[dict[str, Any]]:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             db.row_factory = sqlite3.Row
             try:
                 if category:
@@ -359,7 +360,7 @@ class SQLiteDAO:
 
     async def delete_persona_transient(self, threshold_days: int):
         ts = self._to_ts(datetime.now(timezone.utc) - timedelta(days=threshold_days))
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute("DELETE FROM PersonaTransient WHERE added_on < ?;", (ts,))
                 await db.commit()
@@ -369,7 +370,7 @@ class SQLiteDAO:
 
     # --- User Memory Transient ---
     async def insert_memory_transient(self, memory: dict[str, Any]):
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute(
                     "INSERT INTO UserMemoryTransient(user_id, entry, category) VALUES (?, ?, ?);",
@@ -381,7 +382,7 @@ class SQLiteDAO:
                 print(f"Insert memory transient failed: {err}")
 
     async def select_memory_transient(self, user_id: int | None = None, category: str | None = None) -> list[dict[str, Any]]:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             db.row_factory = sqlite3.Row
             try:
                 query = "SELECT * FROM UserMemoryTransient WHERE 1=1"
@@ -401,7 +402,7 @@ class SQLiteDAO:
 
     async def delete_memory_transient(self, threshold_days: int):
         ts = self._to_ts(datetime.now(timezone.utc) - timedelta(days=threshold_days))
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute("DELETE FROM UserMemoryTransient WHERE added_on < ?;", (ts,))
                 await db.commit()
