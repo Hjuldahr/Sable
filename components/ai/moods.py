@@ -12,7 +12,7 @@ class VAD:
     HIGH = 1.0
     MAX_MAGNITUDE = sqrt(3)
     
-    def __init__(self, category_id:int, valence:float=0.0, arousal:float=0.0, dominance:float=0.0):
+    def __init__(self, category_id:int=0, valence:float=0.0, arousal:float=0.0, dominance:float=0.0):
         self.category_id = category_id
         self._valence = valence
         self._arousal = arousal

@@ -10,7 +10,8 @@ import discord
 
 class SQLiteDAO:
     PATH_ROOT = Path(__file__).resolve().parents[2]
-    MODEL_PATH = PATH_ROOT / 'model' / 'mistral-7b-instruct-v0.1.Q4_K_M.gguf'
+    SETUP_SCRIPT_PATH = PATH_ROOT / 'components' / 'db' / 'setup.sqlite'
+    DB_PATH = PATH_ROOT / 'data' / 'sqlite' / 'database.db'
 
     def __init__(self):
         asyncio.run(self.run_setup_script())
@@ -20,9 +21,8 @@ class SQLiteDAO:
             try:
                 if self.SETUP_SCRIPT_PATH.exists():
                     script = self.SETUP_SCRIPT_PATH.read_text()
-                    if script.strip():
-                        await db.executescript(script)
-                        await db.commit()
+                    await db.executescript(script)
+                    await db.commit()
             except (aiosqlite.Error, OSError) as err:
                 await db.rollback()
                 print(f"Schema setup failed, rolled back: {err}")

@@ -1,15 +1,16 @@
 import asyncio
+import atexit
 from concurrent.futures import ThreadPoolExecutor
+import re
 from typing import Any, Iterable
 from pathlib import Path
 
-import aiofiles
+from urlextract import URLExtract
 from llama_cpp import Llama
 from markitdown import MarkItDown
 
 from .moods import VAD, Moods
 from .tags import Tags
-
 
 class LLMUtilities:
     INSTRUCTION = """You are Sable, a playful, and curious AI companion.
@@ -30,6 +31,13 @@ Show curiosity and playfulness in your replies.
     
     LOWEST_TEMP = 0.2
     HIGHEST_TEMP = 0.9
+    
+    NORM_TEXT_REGEX = (
+        (re.compile(r'(<br\s*/?>|&nbsp;)', re.I), ' '),
+        (re.compile(r'[\r\n]+'), ' '),
+        (re.compile(r'[^\x20-\x7E]'), ''),
+        (re.compile(r'\s+'), ' ')
+    )
 
     def __init__(self, n_threads: int = 4, n_gpu_layers: int = 16):
         self.llm = Llama(
@@ -37,16 +45,23 @@ Show curiosity and playfulness in your replies.
             n_ctx=self.MAX_CONTEXT_TOKENS,
             n_threads=n_threads,
             n_gpu_layers=n_gpu_layers,
-            verbose=False,
+            verbose=False
         )
 
         self.tokenizer = self.llm.tokenizer()
         self.executor = ThreadPoolExecutor(
             max_workers=n_threads,
-            thread_name_prefix="sable_llm",
+            thread_name_prefix="sable_llm"
         )
         
+        self.url_extractor = URLExtract()
         self.markdown = MarkItDown()
+        
+        atexit.register(self._close)
+        
+    def _close(self):
+        self.executor.shutdown()
+        self.llm.close()
 
     # ---------- Token estimation ----------
 
@@ -148,6 +163,20 @@ Show curiosity and playfulness in your replies.
 
         return self.extract_from_output(output)
     
+    def normalize_text_for_tokenization(self, text: str) -> str:
+        """
+        Normalize raw text (Markdown, HTML, logs, code) for LLM tokenization.
+        
+        - Replaces various line breaks (\n, \r\n, <br>, &nbsp;) with spaces
+        - Collapses multiple whitespace into a single space
+        - Preserves URLs, file paths, and code-like structures
+        - Removes control characters except basic punctuation
+        """
+        for (regex, repl) in self.NORM_TEXT_REGEX:
+            text = regex.sub(repl, text)
+
+        return text.strip()
+    
     async def summarize_files(self, attachments: list[Path], max_chars: int = 500) -> dict[str, str]:
         """
         Summarizes all attachment markdowns for prompt injection.
@@ -156,7 +185,9 @@ Show curiosity and playfulness in your replies.
         summaries = {}
         for filepath in attachments:
             md = self.markdown.convert_local(filepath)
-            text = str(md).strip()
+            text = str(md)  # raw Markdown or URL content
+            text = self.normalize_text_for_tokenization(text)
+
             current_tokens = self.RESERVED_OUTPUT_TOKENS
             i = 0
             for word in text.split():
@@ -165,9 +196,10 @@ Show curiosity and playfulness in your replies.
                     break
                 current_tokens += tokens
                 i += len(word) + 1
+
             text = text[:i].rstrip()
             
-            prompt = f"Summarize the file {filepath.name} into concise key points (max {max_chars} characters):\n\n{text}"
+            prompt = f"Summarize the file {filepath.name}, into concise key points (max {max_chars} characters):\n\n{text}"
             try:
                 output = await asyncio.get_running_loop().run_in_executor(
                     self.executor, self.sync_generate, prompt, 0.5
@@ -178,6 +210,55 @@ Show curiosity and playfulness in your replies.
             except Exception as e:
                 print(f"Failed summarizing {filepath}: {e}")
         return summaries
+    
+    async def embed_url_summaries(self, source_text: str, max_chars: int = 250) -> str:
+        """
+        Substitutes URLs in text with inline summaries.
+        """
+        try:
+            urls = self.url_extractor.find_urls(source_text, only_unique=True)
+        except Exception as err:
+            print(f'Failed extracting urls: {err}')
+            return source_text
+
+        for url in urls:
+            try:
+                md = self.markdown.convert_url(url)
+                text = str(md)  # raw Markdown or URL content
+                text = self.normalize_text_for_tokenization(text)
+
+                current_tokens = self.RESERVED_OUTPUT_TOKENS
+                i = 0
+                for word in text.split():
+                    tokens = self.token_estimator(word)
+                    if current_tokens + tokens > self.MAX_CONTEXT_TOKENS:
+                        break
+                    current_tokens += tokens
+                    i += len(word) + 1
+
+                text = text[:i].rstrip()
+
+                prompt = f"Summarize the web resource {url}, into concise key points (max {max_chars} characters):\n\n{text}"
+
+                output = await asyncio.get_running_loop().run_in_executor(
+                    self.executor,
+                    self.sync_generate,
+                    prompt,
+                    0.5
+                )
+
+                summary_text, _ = self.extract_from_output(output)
+                summary_text = summary_text[:max_chars].strip() or "No content to summarize"
+
+                source_text = source_text.replace(
+                    url,
+                    f'[{summary_text}]({url})'
+                )
+
+            except Exception as e:
+                print(f"Failed summarizing {url}: {e}")
+
+        return source_text
     
     def select_reaction(
         self,

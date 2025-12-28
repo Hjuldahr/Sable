@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 from concurrent.futures import ThreadPoolExecutor
 import re
 from typing import Iterable
@@ -37,7 +38,7 @@ class NLPUtilities:
     def __init__(self, n_threads = 4):
         if not nltk.data.find("tokenizers/punkt", None):
             nltk.download("punkt", quiet=True)
-        if not nltk.data.find("tokenizers/averaged_perceptron_tagger", None):
+        if not nltk.data.find("taggers/averaged_perceptron_tagger", None):
             nltk.download("averaged_perceptron_tagger", quiet=True)
         if not nltk.data.find("corpora/stopwords", None):
             nltk.download("stopwords", quiet=True)
@@ -47,8 +48,13 @@ class NLPUtilities:
             max_workers=n_threads, 
             thread_name_prefix='sable_nlp'
         )
+        
+        atexit.register(self._close)
 
     # ---------- Internal helpers ----------
+    
+    def _close(self):
+        self.executor.shutdown()
 
     def _clean_phrase(self, text: str) -> str:
         text = text.strip()

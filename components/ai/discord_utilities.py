@@ -6,15 +6,18 @@ from typing import Any, Dict, List, Tuple
 import discord
 
 class DiscordUtilities:
+    PATH_ROOT = Path(__file__).resolve().parents[2]
+    ATTACHMENT_PATH = PATH_ROOT / 'data' / 'discord' / 'attachments'
+    
     def __init__(self):
         self.markdown = MarkItDown()
         self.extractor = URLExtract()
     
-    async def extract_attachments_from_message(self, parent_path: Path, message: discord.Message) -> Dict[Path, Dict[str, str]]:
+    async def extract_attachments_from_message(self, message: discord.Message) -> Dict[Path, Dict[str, str]]:
         attachments = {}
         if message.attachments:
             for attachment in message.attachments:
-                child_path = parent_path / attachment.filename
+                child_path = self.ATTACHMENT_PATHT / attachment.filename
                 if child_path.exists():
                     continue
                 try:
@@ -37,38 +40,19 @@ class DiscordUtilities:
                     print(f'Failed to extract reaction from message: {e}')
                     continue
         return reactions
-    
-    async def extract_urls_from_message(self, message: discord.Message) -> Tuple[str, List[str]]:
-        try:
-            content = message.content
-            urls = self.extractor.find_urls(content, only_unique=True, check_dns=True)
-            for url in urls:
-                md = self.markdown.convert_url(url) # replace with more advanced web scraper + md if needed
-                content = content.replace(url, f'({url})[{md}]')
-            return content, urls
-        except Exception as e:
-            print(f'Failed to extract URLs from message: {e}')
-            return message.content, []
 
     async def extract_from_message(
         self,
         ai_user_id: int,
-        parent_path: Path,
         message: discord.Message
     ) -> Dict[str, Any]:
 
-        attachments, reactions, url_result = await asyncio.gather(
-            self.extract_attachments_from_message(parent_path, message),
-            self.extract_reactions_from_message(ai_user_id, message),
-            self.extract_urls_from_message(message),
+        attachments, reactions = await asyncio.gather(
+            self.extract_attachments_from_message(message),
+            self.extract_reactions_from_message(ai_user_id, message)
         )
-
-        content, urls = url_result
-
         return {
-            'content_raw': message.content,
-            'content': content,
-            'urls': urls or [],
+            'content': message.content,
             'attachments': attachments or {},
             'reactions': reactions or [],
         }

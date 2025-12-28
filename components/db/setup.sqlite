@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS Persona (
     subject_history TEXT DEFAULT '[]'       -- JSON blob of long-term topics
 );
 
-INSERT INTO Persona(id) VALUES(1) ON CONFLICT (id) IGNORE;
+INSERT INTO Persona(id) VALUES(1) ON CONFLICT (id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS UserMemory (
     user_id INTEGER PRIMARY KEY,

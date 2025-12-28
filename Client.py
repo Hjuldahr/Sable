@@ -19,7 +19,6 @@ intents.guilds = True
 
 # ---- client ----
 client = discord.Client(intents=intents)
-bot = discord.Bot()
 
 # ---- AI core ----
 ai_user_id = int(os.getenv("BOT_ID")) 
@@ -111,6 +110,7 @@ async def on_ready():
 
 @client.event
 async def on_message(message: discord.Message):
+    """
     if message.author == client.user:
         return
 
@@ -129,6 +129,11 @@ async def on_message(message: discord.Message):
         result = await sable.response()
         response_text = result['response_text']
         await message.channel.send(response_text)
+    """
+    if message.author == client.user or not message.content.strip():
+        return
+    
+    await sable.listen(message)
 
 if __name__ == "__main__":
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")

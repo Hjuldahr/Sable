@@ -9,9 +9,9 @@ from .nlp_utilities import NLPUtilities
 from .llm_utilities import LLMUtilities
 
 from .tags import Tags
-from .moods import Moods
+from .moods import VAD, Moods
 
-from db.sqlite_dao import SQLiteDAO
+from components.db.sqlite_dao import SQLiteDAO
 
 class AICore:
     CONTEXT_TOKENS = 32768
@@ -35,7 +35,6 @@ class AICore:
                 discord_client: discord.Client, 
                 ai_user_id: int, 
                 ai_user_name='Sable',
-                model_path=r'.\model\mistral-7b-instruct-v0.1.Q4_K_M.gguf', 
                 n_threads=4):
 
         self.discord_client = discord_client
@@ -44,7 +43,7 @@ class AICore:
         
         # ---- Runtime State ----
         # VAD - Defaults to neutral
-        self.vad: dict[str, float] = Moods.VAD[Moods.NEUTRAL]
+        self.vad = VAD(Moods.NEUTRAL)
         # Decaying AI Biases
         self.persona_likes: list[dict[str, Any]] = []
         self.persona_dislikes: list[dict[str, Any]]  = []
@@ -53,8 +52,9 @@ class AICore:
         # Token Counted Context
         self.context_window = []
         
-        self.discord_utilities = DiscordUtilities()
-        self.nlp_utilities = NLPUtilities()
+        self.discord = DiscordUtilities()
+        self.nlp = NLPUtilities()
+        self.llm = LLMUtilities()
         
         # ---- DAO Setup ----
         
@@ -65,26 +65,9 @@ class AICore:
         self.executor = ThreadPoolExecutor(max_workers=n_threads, thread_name_prefix=self.ai_user_name)
         self.conversation_history_lock = asyncio.Lock()
         
-        # ---- AI Setup ----
-        
-        self.model_path = model_path
-        self.n_threads=4
-        self.llm = Llama(model_path, n_ctx=self.CONTEXT_TOKENS, n_threads=n_threads, n_gpu_layers=16, verbose=False)
-        self.tokenizer = self.llm.tokenizer()
-        
-        # ---- AI Token Counts ----
-        
-        self.tag_token_counts = {
-            Tags.SYS: self.token_counter(Tags.SYS_TAG),
-            Tags.AI: self.token_counter(Tags.AI_TAG),
-            Tags.USER: self.token_counter(Tags.USER_TAG)
-        }
-        self.instruction_token_count = self.token_counter(self.INSTRUCTION)
-        self.reserved_tokens = self.RESERVED_OUTPUT_TOKENS + self.instruction_token_count + self.tag_token_counts[Tags.AI] + self.tag_token_counts[Tags.SYS]
-        
     async def runtime_setup(self):
         # ---- Runtime State Setup ----
-        await self.dao.run_setup_script()
+        # await self.dao.run_setup_script()
         
         self.persona_state = await self.dao.select_persona()
         
@@ -119,12 +102,19 @@ class AICore:
         # VAD determines temperature and mood cue. Memories dictate prompt biases. Messages injects historical context.
         
     def vad_to_llm(self):
-        temperature = self.BASE_TEMP + alpha * (Arousal - 0.5)
-        top_p = base_top_p + beta * (Valence - 0.5)
-        response_length = self.BASE_LENGTH + gamma * self.vad['dominance']    
+        pass
+        #temperature = self.BASE_TEMP + alpha * (Arousal - 0.5)
+        #top_p = base_top_p + beta * (Valence - 0.5)
+        #response_length = self.BASE_LENGTH + gamma * self.vad['dominance']    
         
     async def listen(self, message: discord.Message):
-        reactions = DiscordUtilities.extract_reactions_from_message(self.ai_user_id, message)
+        await self.dao.upsert_message(message)
+        
+        results = await self.discord.extract_from_message(self.ai_user_id, message)
+        results |= await self.nlp.extract_all(message)
+        results['content'] = await self.llm.embed_url_summaries(results['content'])
+        
+        print(results)
     
     async def speak(self, prompt: discord.Message):
         pass
