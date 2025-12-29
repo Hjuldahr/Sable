@@ -4,6 +4,9 @@ CREATE TABLE IF NOT EXISTS DiscordGuilds (
     guild_id INTEGER PRIMARY KEY,
     guild_name TEXT,
     guild_description TEXT,
+    nsfw_level TEXT, -- enum
+    verification_level TEXT, -- enum
+    filesize_limit INTEGER, -- bytes
     created_at INTEGER -- dtime
 );
 
@@ -12,8 +15,10 @@ CREATE TABLE IF NOT EXISTS DiscordTextChannels (
     guild_id INTEGER,
     channel_name TEXT,
     channel_topic TEXT,
+    channel_type TEXT,
     is_nsfw INTEGER DEFAULT 0, -- Boolean
     created_at INTEGER, -- dtime
+    permissions_json TEXT,
     FOREIGN KEY (guild_id) REFERENCES DiscordGuilds(guild_id) ON DELETE CASCADE
 );
 

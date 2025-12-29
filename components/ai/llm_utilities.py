@@ -24,9 +24,9 @@ Show curiosity and playfulness in your replies.
 """
 
     PATH_ROOT = Path(__file__).resolve().parents[2]
-    LLM_PATH = PATH_ROOT / "model" / "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+    LLM_PATH = PATH_ROOT / "model" / "mistral-7b-instruct-v0.1.Q4_0.gguf"
 
-    MAX_CONTEXT_TOKENS = 2**14
+    MAX_CONTEXT_TOKENS = 2**12
     RESERVED_OUTPUT_TOKENS = 255
     
     LOWEST_TEMP = 0.2
@@ -39,7 +39,7 @@ Show curiosity and playfulness in your replies.
         (re.compile(r'\s+'), ' ')
     )
 
-    def __init__(self, n_threads: int = 4, n_gpu_layers: int = 16):
+    def __init__(self, n_threads: int = 2, n_gpu_layers: int = 16):
         self.llm = Llama(
             model_path=str(self.LLM_PATH),
             n_ctx=self.MAX_CONTEXT_TOKENS,
@@ -152,6 +152,7 @@ Show curiosity and playfulness in your replies.
         )
         
         temperature = self.remap(vad.arousal, VAD.LOW, VAD.HIGH, self.LOWEST_TEMP, self.HIGHEST_TEMP) 
+        # top_p = 0.9
 
         loop = asyncio.get_running_loop()
         output = await loop.run_in_executor(

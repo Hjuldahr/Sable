@@ -57,16 +57,21 @@ class SQLiteDAO:
         return int(value)
 
     # --- Guilds ---
-    async def upsert_guild(self, guild: discord.Guild):
+    # guild: discord.Guild
+    async def upsert_guild(self, guild: dict[str, Any]):
         async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute(
-                    """INSERT INTO DiscordGuilds(guild_id, guild_name, guild_description, created_at)
-                       VALUES (?, ?, ?, ?)
+                    """INSERT INTO DiscordGuilds(guild_id, guild_name, guild_description, created_at, nsfw_level, verification_level, filesize_limit)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(guild_id) DO UPDATE SET
                            guild_name = EXCLUDED.guild_name,
-                           guild_description = EXCLUDED.guild_description;""",
-                    (guild.id, guild.name, guild.description, self._to_ts(guild.created_at))
+                           guild_description = EXCLUDED.guild_description,
+                           nsfw_level = EXCLUDED.nsfw_level,
+                           verification_level = EXCLUDED.verification_level,
+                           filesize_limit = EXCLUDED.filesize_limit;
+                           """,
+                    (guild['id'], guild['name'], guild['description'], self._to_ts(guild['created_at']), guild['nsfw_level'], guild['verification_level'], guild['filesize_limit'])
                 )
                 await db.commit()
             except aiosqlite.Error as err:
@@ -112,17 +117,20 @@ class SQLiteDAO:
                 print(f"Delete guild failed: {err}")
 
     # --- Text Channels ---
-    async def upsert_text_channel(self, channel: discord.TextChannel):
+    # channel: discord.TextChannel
+    async def upsert_text_channel(self, channel: dict[str, Any]):
         async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute(
-                    """INSERT INTO DiscordTextChannels(channel_id, guild_id, channel_name, channel_topic, is_nsfw, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?)
+                    """INSERT INTO DiscordTextChannels(channel_id, guild_id, channel_name, channel_topic, channel_type, is_nsfw, permissions_json, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(channel_id) DO UPDATE SET
                            channel_name = EXCLUDED.channel_name,
                            channel_topic = EXCLUDED.channel_topic,
+                           channel_type = EXCLUDED.channel_type,
+                           permissions_json = EXCLUDED.permissions_json,
                            is_nsfw = EXCLUDED.is_nsfw;""",
-                    (channel.id, channel.guild.id, channel.name, channel.topic, self._from_bool(channel.nsfw), self._to_ts(channel.created_at))
+                    (channel['id'], channel['guild_id'], channel['name'], channel['topic'], channel['type'], self._from_bool(channel['is_nsfw']), self._json_dump(channel['permissions']), self._to_ts(channel['created_at']))
                 )
                 await db.commit()
             except aiosqlite.Error as err:
@@ -142,7 +150,8 @@ class SQLiteDAO:
                     return {
                         **dict(row),
                         'created_at': self._from_ts(row['created_at']),
-                        'is_nsfw': self._to_bool(row['is_nsfw'])
+                        'is_nsfw': self._to_bool(row['is_nsfw']),
+                        'permissions': self._json_load(row['permissions'])
                     }
             except aiosqlite.Error as err:
                 print(f"Select text channel failed: {err}")
@@ -154,7 +163,7 @@ class SQLiteDAO:
             try:
                 async with db.execute("SELECT * FROM DiscordTextChannels WHERE guild_id=?;", (guild_id,)) as cursor:
                     rows = await cursor.fetchall()
-                    return [{**dict(row), 'created_at': self._from_ts(row['created_at']), 'is_nsfw': self._to_bool(row['is_nsfw'])} for row in rows]
+                    return [{**dict(row), 'created_at': self._from_ts(row['created_at']), 'is_nsfw': self._to_bool(row['is_nsfw']), 'permissions': self._json_load(row['permissions'])} for row in rows]
             except aiosqlite.Error as err:
                 print(f"Select all text channels failed: {err}")
                 return []
@@ -169,10 +178,11 @@ class SQLiteDAO:
                 print(f"Delete text channel failed: {err}")
 
     # --- Messages ---
-    async def upsert_message(self, message: discord.Message):
+    # message: discord.Message
+    async def upsert_message(self, message: dict[str, Any]):
         async with aiosqlite.connect(self.DB_PATH) as db:
             try:
-                reactions = self._json_dump([{'emoji': str(r.emoji), 'count': r.count, 'me': r.me} for r in message.reactions])
+                reactions = self._json_dump([{'emoji': str(r.emoji), 'count': r.count, 'me': r.me} for r in message['reactions']])
                 await db.execute(
                     """INSERT INTO DiscordMessage(message_id, references_message_id, user_id, channel_id, text, reactions, created_at, edited_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -181,8 +191,8 @@ class SQLiteDAO:
                            text=EXCLUDED.text,
                            reactions=EXCLUDED.reactions,
                            edited_at=EXCLUDED.edited_at;""",
-                    (message.id, message.reference.message_id if message.reference else None, message.author.id, message.channel.id,
-                     message.content, reactions, self._to_ts(message.created_at, required=True), self._to_ts(message.edited_at))
+                    (message['id'], message['reference_message_id'], message['author_id'], message['channel_id'],
+                     message['content'], reactions, self._to_ts(message['created_at'], required=True), self._to_ts(message['edited_at']))
                 )
                 # Upsert attachments
                 for attachment in message.attachments:
@@ -192,6 +202,19 @@ class SQLiteDAO:
             except Exception as err:
                 await db.rollback()
                 print(f"Upsert message failed: {err}")
+                
+    async def update_message_reactions(self, message_id: int, reactions: list[discord.Reaction]):
+        async with aiosqlite.connect(self.DB_PATH) as db:
+            try:
+                reactions = self._json_dump([{'emoji': str(r.emoji), 'count': r.count, 'me': r.me} for r in reactions])
+                await db.execute(
+                    "UPDATE DiscordMessage SET reactions = ? WHERE message_id = ?;",
+                    (reactions, message_id)
+                )
+                await db.commit()
+            except Exception as err:
+                await db.rollback()
+                print(f"Update reactions failed: {err}")
 
     async def select_message(self, message_id: int) -> dict[str, Any] | None:
         async with aiosqlite.connect(self.DB_PATH) as db:
@@ -206,6 +229,17 @@ class SQLiteDAO:
                 print(f"Select message failed: {err}")
                 return None
 
+    async def select_messages_by_channel(self, channel_id: int) -> list[dict[str, Any]] | None:
+        async with aiosqlite.connect(self.DB_PATH) as db:
+            db.row_factory = sqlite3.Row
+            try:
+                async with db.execute("SELECT * FROM DiscordMessage WHERE channel_id=?;", (channel_id,)) as cursor:
+                    rows = await cursor.fetchall()
+                    return [{**dict(row), 'created_at': self._from_ts(row['created_at']), 'edited_at': self._from_ts(row['edited_at'])} for row in rows]
+            except aiosqlite.Error as err:
+                print(f"Select message failed: {err}")
+                return None
+
     async def delete_message(self, message_id: int):
         async with aiosqlite.connect(self.DB_PATH) as db:
             try:
@@ -216,7 +250,7 @@ class SQLiteDAO:
                 print(f"Delete message failed: {err}")
 
     # --- Attachments ---
-    async def upsert_attachment(self, db: aiosqlite.Connection, message_id: int, attachment: discord.Attachment):
+    async def upsert_attachment(self, db: aiosqlite.Connection, message_id: int, attachment: discord.Attachment, path: Path):
         try:
             await db.execute(
                 """INSERT INTO DiscordAttachments(attachment_id, message_id, source_url, source_proxy_url, local_path, title, content_type, file_name, description, is_spoiler, size)
@@ -334,8 +368,12 @@ class SQLiteDAO:
     async def insert_persona_transient(self, entry: dict[str, Any]):
         async with aiosqlite.connect(self.DB_PATH) as db:
             try:
-                await db.execute(
-                    "INSERT INTO PersonaTransient(entry, category) VALUES (?, ?);",
+                # If it already exists, simply refresh the timestamp to delay expiry
+                await db.execute("""
+                    INSERT INTO PersonaTransient(entry, category) VALUES (?, ?)
+                    ON CONFLICT(entry, category) DO UPDATE SET
+                        added_on=(strftime('%s','now'));
+                    """,
                     (entry['entry'], entry['category'])
                 )
                 await db.commit()
@@ -372,8 +410,12 @@ class SQLiteDAO:
     async def insert_memory_transient(self, memory: dict[str, Any]):
         async with aiosqlite.connect(self.DB_PATH) as db:
             try:
-                await db.execute(
-                    "INSERT INTO UserMemoryTransient(user_id, entry, category) VALUES (?, ?, ?);",
+                # If it already exists, simply refresh the timestamp to delay expiry
+                await db.execute("""
+                    INSERT INTO UserMemoryTransient(user_id, entry, category) VALUES (?, ?, ?);
+                    ON CONFLICT(user_id, entry, category) DO UPDATE SET
+                        added_on=(strftime('%s','now'));
+                    """,
                     (memory['user_id'], memory['entry'], memory['category'])
                 )
                 await db.commit()
@@ -381,11 +423,11 @@ class SQLiteDAO:
                 await db.rollback()
                 print(f"Insert memory transient failed: {err}")
 
-    async def select_memory_transient(self, user_id: int | None = None, category: str | None = None) -> list[dict[str, Any]]:
+    async def select_memory_transient(self, user_id: int, category: str) -> list[dict[str, Any]]:
         async with aiosqlite.connect(self.DB_PATH) as db:
             db.row_factory = sqlite3.Row
             try:
-                query = "SELECT * FROM UserMemoryTransient WHERE 1=1"
+                query = "SELECT * FROM UserMemoryTransient WHERE user_id=? AND category=? ORDER BY added_on"
                 params: list[Any] = []
                 if user_id is not None:
                     query += " AND user_id=?"

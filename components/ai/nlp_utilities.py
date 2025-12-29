@@ -35,7 +35,7 @@ class NLPUtilities:
         re.compile(r"\bi spend a lot of time\b(.+)", re.I),
     )
 
-    def __init__(self, n_threads = 4):
+    def __init__(self, n_threads = 2):
         if not nltk.data.find("tokenizers/punkt", None):
             nltk.download("punkt", quiet=True)
         if not nltk.data.find("taggers/averaged_perceptron_tagger", None):
@@ -89,10 +89,9 @@ class NLPUtilities:
 
     def _extract_content(
         self,
-        message: discord.Message,
+        text: str,
         regx_set: Iterable[re.Pattern],
     ) -> list[str]:
-        text = message.content
         contents: list[str] = []
 
         for regx in regx_set:
@@ -121,30 +120,30 @@ class NLPUtilities:
 
     # ---------- Public extractors ----------
 
-    def extract_likes(self, message: discord.Message) -> list[str]:
-        return self._extract_content(message, self.FIND_LIKES_REGEX)
+    def extract_likes(self, text: str) -> list[str]:
+        return self._extract_content(text, self.FIND_LIKES_REGEX)
 
-    def extract_dislikes(self, message: discord.Message) -> list[str]:
-        return self._extract_content(message, self.FIND_DISLIKES_REGEX)
+    def extract_dislikes(self, text: str) -> list[str]:
+        return self._extract_content(text, self.FIND_DISLIKES_REGEX)
 
-    def extract_avoidances(self, message: discord.Message) -> list[str]:
-        return self._extract_content(message, self.FIND_AVOIDANCES_REGEX)
+    def extract_avoidances(self, text: str) -> list[str]:
+        return self._extract_content(text, self.FIND_AVOIDANCES_REGEX)
 
-    def extract_passions(self, message: discord.Message) -> list[str]:
-        return self._extract_content(message, self.FIND_PASSIONS_REGEX)
+    def extract_passions(self, text: str) -> list[str]:
+        return self._extract_content(text, self.FIND_PASSIONS_REGEX)
     
-    async def extract_all(self, message: discord.Message) -> dict[str, list[str]]:
+    async def extract_all(self, text: str) -> dict[str, list[str]]:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self.executor,
             self._extract_all_sync,
-            message
+            text
         )
 
-    def _extract_all_sync(self, message: discord.Message) -> dict[str, list[str]]:
+    def _extract_all_sync(self, text: str) -> dict[str, list[str]]:
         return {
-            'likes': self._extract_content(message, self.FIND_LIKES_REGEX),
-            'dislikes': self._extract_content(message, self.FIND_DISLIKES_REGEX),
-            'avoidances': self._extract_content(message, self.FIND_AVOIDANCES_REGEX),
-            'passions': self._extract_content(message, self.FIND_PASSIONS_REGEX),
+            'likes': self._extract_content(text, self.FIND_LIKES_REGEX),
+            'dislikes': self._extract_content(text, self.FIND_DISLIKES_REGEX),
+            'avoidances': self._extract_content(text, self.FIND_AVOIDANCES_REGEX),
+            'passions': self._extract_content(text, self.FIND_PASSIONS_REGEX),
         }

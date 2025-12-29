@@ -2,18 +2,16 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 import discord
-from llama_cpp import Llama
 
-from .discord_utilities import DiscordUtilities
-from .nlp_utilities import NLPUtilities
-from .llm_utilities import LLMUtilities
-
-from .tags import Tags
-from .moods import VAD, Moods
+from components.discord.discord_utilities import DiscordUtilities
+from components.ai.nlp_utilities import NLPUtilities
+from components.ai.llm_utilities import LLMUtilities
+from components.ai.tags import Tags
+from components.ai.moods import VAD, Moods
 
 from components.db.sqlite_dao import SQLiteDAO
 
-class AICore:
+class Coordinator:
     CONTEXT_TOKENS = 32768
     MAX_HISTORY = 1000
     PRUNE_HISTORY = 750
@@ -32,12 +30,10 @@ class AICore:
     Show curiosity and playfulness in your replies."""
 
     def __init__(self, 
-                discord_client: discord.Client, 
                 ai_user_id: int, 
                 ai_user_name='Sable',
                 n_threads=4):
 
-        self.discord_client = discord_client
         self.ai_user_id = ai_user_id
         self.ai_user_name = ai_user_name
         
@@ -99,25 +95,36 @@ class AICore:
         # UserMemoryTransient (expring, multiple per user)(Likes, Dislikes, Learned Facts, Wants, Needs, Taboos, etc) = Medium Term
         # DiscordMessage / DiscordAttachments / DiscordChannels (Raw Context) = Short Term 
         # VAD (Derivational Emotion Space) = Session Term
-        # VAD determines temperature and mood cue. Memories dictate prompt biases. Messages injects historical context.
+        # VAD determines temperature and mood cue. Memories dictate prompt biases. Messages injects historical context. 
         
-    def vad_to_llm(self):
-        pass
-        #temperature = self.BASE_TEMP + alpha * (Arousal - 0.5)
-        #top_p = base_top_p + beta * (Valence - 0.5)
-        #response_length = self.BASE_LENGTH + gamma * self.vad['dominance']    
-        
-    async def listen(self, message: discord.Message):
-        await self.dao.upsert_message(message)
-        
+    async def read(self, message: discord.Message):
         results = await self.discord.extract_from_message(self.ai_user_id, message)
-        results |= await self.nlp.extract_all(message)
-        results['content'] = await self.llm.embed_url_summaries(results['content'])
+        results['extracted'] = await self.nlp.extract_all(message.content)
+        # results['content'] = await self.llm.embed_url_summaries(results['content'])
+        results['token_count'] = self.llm.token_estimator(message.content)
+        
+        await self.dao.upsert_message(results)
+        
+        for category, entries in results['extracted'].items():
+            for entry in entries:
+                await self.dao.insert_memory_transient({
+                    'user_id': message.author.id,
+                    'entry': entry,
+                    'category': category
+                })
         
         print(results)
     
-    async def speak(self, prompt: discord.Message):
-        pass
+    async def write(self, message: discord.Message) -> str:
+        entries = await self.dao.select_messages_by_channel(message.channel.id)
+
+        content, token_count = await self.llm.generate_text(self.vad, entries)
+        extracted = await self.nlp.extract_all(content)
+        
+        
     
     async def emote(self, prompt: discord.Message):
+        pass
+    
+    def close(self):
         pass
