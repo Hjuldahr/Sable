@@ -43,20 +43,20 @@ Download and install **Python 3.12.\***
 [https://www.python.org/downloads/release/python-31210/](https://www.python.org/downloads/release/python-31210/)
 
 From your development terminal:
-
-`pip install aiosqlite`\
-`pip install aiofiles`\
-`pip install llama-cpp-python`\
-`pip install discord.py`\
-`pip install dotenv`\
-`pip install markitdown`\
-`pip install nltk`\
-`pip install urlextract`
-
+```
+pip install aiosqlite
+pip install aiofiles
+pip install llama-cpp-python
+pip install discord.py
+pip install dotenv
+pip install markitdown
+pip install nltk
+pip install urlextract
+```
 Or install everything at once:
-
-`pip install -r requirements.txt`
-
+```
+pip install -r requirements.txt
+```
 ### 5. Language Model
 ***
 Download the Mistral model:
