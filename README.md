@@ -80,7 +80,8 @@ On first launch, this will automatically create:
 
 `data/database.db`
 
-if it does not already exist.
+If it does not already exist.\
+(Deleting it is a quick way to reset the DB)
 
 ## Starting the Bot
 Run the application:
@@ -100,7 +101,7 @@ This will attempt to perform the following:
 Press `Ctrl + C` or close the terminal session (less recommended)
 
 ## Disclaimer & Usage
-- This project is intended for **personal, educational, or experimental use only**.\
+- This project is intended for **personal, educational, and experimental use only**.\
 It is **not designed for commercial use or monetization**.
 - If you adapt or redistribute this project, please **fork the repository** or provide **clear creator attribution** in documentation and/or code comments.
 - This project is **under active development** and is provided **“as-is”**, without warranty of any kind.\

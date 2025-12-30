@@ -24,7 +24,7 @@ Show curiosity and playfulness in your replies.
 """
 
     PATH_ROOT = Path(__file__).resolve().parents[2]
-    LLM_PATH = PATH_ROOT / "model" / "mistral-7b-instruct-v0.1.Q4_0.gguf"
+    LLM_PATH = PATH_ROOT / "model" / "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
 
     MAX_CONTEXT_TOKENS = 2**12
     RESERVED_OUTPUT_TOKENS = 255
