@@ -166,6 +166,8 @@ async def on_message(received_message: discord.Message):
         sent_message = await received_message.reply(reply_content, silent=False)
         
     await sable.dao.upsert_message(sent_message, token_count)
+    
+    print(f"{received_message.author.id} sent the text message {received_message.id}")
 
 @client.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
@@ -173,7 +175,14 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
         return
     
     await sable.listen(after)
-    await sable.dao.upsert_message(after)
+    
+    print(f"{after.author.id} edited the message {before.id}")
+
+@client.event
+async def on_message_delete(message: discord.Message):
+    await sable.dao.delete_message(message.id)
+    
+    print(f"{message.author.id} deleted the message {message.id}")
 
 @client.event
 async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
