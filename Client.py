@@ -1,6 +1,7 @@
 import asyncio
 from collections import deque
 import os
+import re
 import signal
 import discord
 from dotenv import load_dotenv
@@ -20,19 +21,13 @@ client = discord.Client(intents=intents)
 ai_user_id = int(os.getenv("BOT_ID")) 
 sable = Coordinator(ai_user_id, 'Sable')
 
+# --- regex ---- 
+mention_or_space = re.compile(r'<@!?\d{17,19}>|\s')
+
 @client.event
 async def on_guild_join(guild: discord.Guild):
     # This function runs when the bot joins a new guild
-    guild_dict = {
-        'id': guild.id,
-        'name': guild.name,
-        'description': guild.description or 'No description provided',
-        'created_at': guild.created_at,
-        'nsfw_level': guild.nsfw_level.name,
-        'verification_level': guild.verification_level.name,
-        'filesize_limit': guild.filesize_limit
-    }
-    await sable.dao.upsert_guild()
+    await sable.dao.upsert_guild(guild)
     print(f'I joined a new guild: {guild.name} [ID: {guild.id}]')
 
     # UNDECIDED Remove if more annoying than endearing
@@ -45,17 +40,9 @@ async def on_guild_join(guild: discord.Guild):
     for channel in guild.channels:
         permissions = channel.permissions_for(guild.me)
         if permissions.read_message_history and permissions.read_messages:
-            channel_dict = {
-                'id': channel.id,
-                'guild_id': channel.guild.id,
-                'name': channel.name,
-                'topic': channel.topic or 'No topic provided',
-                'type': channel.type.name,
-                'is_nsfw': channel.is_nsfw,
-                'created_at': channel.created_at,
-                'permissions': {flag_name: value for flag_name, value in permissions}
-            }
-            await sable.dao.upsert_channel(channel_dict)
+            # if needed, perform a fetch for every message to get context retroactively
+            
+            await sable.dao.upsert_text_channel(channel, permissions)
 
     # Attempt to message default channel
     if guild.system_channel:
@@ -65,7 +52,6 @@ async def on_guild_join(guild: discord.Guild):
             print(f"I announced my arrival at {guild.name} via '{channel.name}' [ID: {channel.id}]")
             # TODO replace with generated salutation
             await channel.send('Hi everyone! I hope we can be friends!')
-            #await dao.upsert_guild(guild)
 
     # Fall back: Scan for first open text channel (less safe as it may be an improper location for greetings)
     else:
@@ -107,8 +93,8 @@ async def on_guild_remove(guild: discord.Guild):
                 # TODO replace with generated goodbye
                 await channel.send('I am sorry if I had done something wrong. I hope I can come back in the future. But until then goodbye everyone!')
                 break
-            
-    await sable.dao.remove_guild(guild.id)
+
+    await sable.dao.delete_guild(guild.id)
 
 @client.event
 async def on_guild_channel_update(before, after):
@@ -126,7 +112,7 @@ async def on_guild_channel_update(before, after):
 def handle_signal(sig, frame):
     """Schedule async shutdown on SIGINT/SIGTERM."""
     sable.close()
-    asyncio.get_event_loop().create_task(client.close())
+    asyncio.get_running_loop().create_task(client.close()) # fix
 
 # Register signal handlers for Ctrl+C and termination
 for s in (signal.SIGTERM, signal.SIGINT):
@@ -141,33 +127,45 @@ async def allow_reply(message: discord.Message) -> bool:
     if client.user in message.mentions:
         return True
 
-    ref = message.reference
-    if ref:
-        if ref.resolved:
-            return ref.resolved.author.id == sable.ai_user_id
+    if message.reference:
+        if message.reference.resolved:
+            return message.reference.resolved.author.id == sable.ai_user_id
         else:
             # fetch message if not cached
             try:
-                msg = await message.channel.fetch_message(ref.message_id)
+                msg = await message.channel.fetch_message(message.reference.message_id)
                 return msg.author.id == sable.ai_user_id
             except Exception:
                 return False
     return False
 
 @client.event
-async def on_message(message: discord.Message):
-    if message.author.bot or not message.content.strip():
+async def on_message(received_message: discord.Message):
+    if received_message.author.bot:
         return
     
-    await sable.read(message) # Absorb context passively
+    stripped_content = mention_or_space.sub('', received_message.content) if received_message.mentions else received_message.content.strip()
+
+    if stripped_content != "":
+        await sable.read(received_message) # Absorb context passively
+    
+    #await message.channel.send_sound(), tts
     
     # TODO add heuristic scoring for an unprompted response
+    if False == True:
+        async with received_message.channel.typing():
+            send_content, token_count = await sable.write(received_message) # contribute proactively
+            
+        sent_message = await received_message.channel.send(send_content, silent=False)
     
-    if allow_reply(message):
-        reply_content = await sable.write(message) # contribute reactively
+    elif allow_reply(received_message):
+        async with received_message.channel.typing():
+            reply_content, token_count = await sable.write(received_message) # contribute reactively
         
         # NOTE Set to silent if the notification feels more annoying then helpful
-        await message.reply(content=reply_content, silent=False)
+        sent_message = await received_message.reply(reply_content, silent=False)
+        
+    await sable.dao.upsert_message(sent_message, token_count)
 
 @client.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
@@ -175,6 +173,7 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
         return
     
     await sable.listen(after)
+    await sable.dao.upsert_message(after)
 
 @client.event
 async def on_reaction_add(reaction: discord.Reaction, user: discord.User):

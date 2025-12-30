@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS DiscordMessage (
     user_id INTEGER,
     channel_id INTEGER,
     text TEXT,
+    token_count INTEGER NULL,
     edited_at INTEGER NULL, -- dtime, null if unedited
     reactions TEXT DEFAULT '{}',              -- JSON blob
     created_at INTEGER DEFAULT (strftime('%s','now')),

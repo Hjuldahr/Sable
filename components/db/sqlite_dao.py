@@ -57,8 +57,7 @@ class SQLiteDAO:
         return int(value)
 
     # --- Guilds ---
-    # guild: discord.Guild
-    async def upsert_guild(self, guild: dict[str, Any]):
+    async def upsert_guild(self, guild: discord.Guild):
         async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 await db.execute(
@@ -71,7 +70,15 @@ class SQLiteDAO:
                            verification_level = EXCLUDED.verification_level,
                            filesize_limit = EXCLUDED.filesize_limit;
                            """,
-                    (guild['id'], guild['name'], guild['description'], self._to_ts(guild['created_at']), guild['nsfw_level'], guild['verification_level'], guild['filesize_limit'])
+                    (
+                        guild.id, 
+                        guild.name, 
+                        guild.description or 'No Description Found', 
+                        self._to_ts(guild.created_at), 
+                        guild.nsfw_level.name, 
+                        guild.verification_level.name, 
+                        guild.filesize_limit
+                    )
                 )
                 await db.commit()
             except aiosqlite.Error as err:
@@ -117,10 +124,11 @@ class SQLiteDAO:
                 print(f"Delete guild failed: {err}")
 
     # --- Text Channels ---
-    # channel: discord.TextChannel
-    async def upsert_text_channel(self, channel: dict[str, Any]):
+    async def upsert_text_channel(self, channel: discord.TextChannel, permissions: discord.Permissions):
         async with aiosqlite.connect(self.DB_PATH) as db:
             try:
+                permissions_json = self._json_dump({flag_name: value for flag_name, value in permissions})
+                
                 await db.execute(
                     """INSERT INTO DiscordTextChannels(channel_id, guild_id, channel_name, channel_topic, channel_type, is_nsfw, permissions_json, created_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -130,7 +138,16 @@ class SQLiteDAO:
                            channel_type = EXCLUDED.channel_type,
                            permissions_json = EXCLUDED.permissions_json,
                            is_nsfw = EXCLUDED.is_nsfw;""",
-                    (channel['id'], channel['guild_id'], channel['name'], channel['topic'], channel['type'], self._from_bool(channel['is_nsfw']), self._json_dump(channel['permissions']), self._to_ts(channel['created_at']))
+                    (
+                        channel.id, 
+                        channel.guild.id, 
+                        channel.name, 
+                        channel.topic or 'Topic not provided', 
+                        channel.type.name, 
+                        self._from_bool(channel.is_nsfw), 
+                        permissions_json, 
+                        self._to_ts(channel.created_at)
+                    )
                 )
                 await db.commit()
             except aiosqlite.Error as err:
@@ -178,21 +195,33 @@ class SQLiteDAO:
                 print(f"Delete text channel failed: {err}")
 
     # --- Messages ---
-    # message: discord.Message
-    async def upsert_message(self, message: dict[str, Any]):
+    async def upsert_message(self, message: discord.Message, token_count: int):
         async with aiosqlite.connect(self.DB_PATH) as db:
             try:
-                reactions = self._json_dump([{'emoji': str(r.emoji), 'count': r.count, 'me': r.me} for r in message['reactions']])
+                reactions_json = self._json_dump([{'emoji': str(r.emoji), 'count': r.count, 'me': r.me} for r in message.reactions])
+                
+                message_reference_id = (message.reference.message_id or -1) if message.reference is not None else -1
+                    
                 await db.execute(
-                    """INSERT INTO DiscordMessage(message_id, references_message_id, user_id, channel_id, text, reactions, created_at, edited_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """INSERT INTO DiscordMessage(message_id, references_message_id, user_id, channel_id, text, token_count, reactions, created_at, edited_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(message_id) DO UPDATE SET
                            references_message_id=EXCLUDED.references_message_id,
                            text=EXCLUDED.text,
+                           token_count=EXCLUDED.token_count,
                            reactions=EXCLUDED.reactions,
                            edited_at=EXCLUDED.edited_at;""",
-                    (message['id'], message['reference_message_id'], message['author_id'], message['channel_id'],
-                     message['content'], reactions, self._to_ts(message['created_at'], required=True), self._to_ts(message['edited_at']))
+                    (
+                        message.id, 
+                        message_reference_id, 
+                        message.author.id, 
+                        message.channel.id,
+                        message.clean_content,
+                        token_count,
+                        reactions_json, 
+                        self._to_ts(message.created_at, required=True), 
+                        self._to_ts(message.edited_at)
+                    )
                 )
                 # Upsert attachments
                 for attachment in message.attachments:

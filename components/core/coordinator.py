@@ -99,13 +99,13 @@ class Coordinator:
         
     async def read(self, message: discord.Message):
         results = await self.discord.extract_from_message(self.ai_user_id, message)
-        results['extracted'] = await self.nlp.extract_all(message.content)
+        extracted = await self.nlp.extract_all(message.content)
         # results['content'] = await self.llm.embed_url_summaries(results['content'])
-        results['token_count'] = self.llm.token_estimator(message.content)
+        token_count = self.llm.token_estimator(message.content)
         
-        await self.dao.upsert_message(results)
+        await self.dao.upsert_message(message, token_count)
         
-        for category, entries in results['extracted'].items():
+        for category, entries in extracted.items():
             for entry in entries:
                 await self.dao.insert_memory_transient({
                     'user_id': message.author.id,
@@ -118,10 +118,22 @@ class Coordinator:
     async def write(self, message: discord.Message) -> str:
         entries = await self.dao.select_messages_by_channel(message.channel.id)
 
+        # TEMP fix
+        for i in range(len(entries)):
+            entries[i]['tag_id'] = Tags.AI if entries[i]['user_id'] == self.ai_user_id else Tags.USER
+
         content, token_count = await self.llm.generate_text(self.vad, entries)
         extracted = await self.nlp.extract_all(content)
         
+        for category, entries in extracted.items():
+            for entry in entries:
+                await self.dao.insert_memory_transient({
+                    'user_id': self.ai_user_id,
+                    'entry': entry,
+                    'category': category
+                })
         
+        return content, token_count
     
     async def emote(self, prompt: discord.Message):
         pass

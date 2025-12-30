@@ -2,7 +2,7 @@ import asyncio
 from pathlib import Path
 from markitdown import MarkItDown
 from urlextract import URLExtract
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 import discord
 
 class DiscordUtilities:

@@ -82,7 +82,7 @@ class VAD:
      
     @classmethod
     def similarity(cls, vad1: VAD, vad2: VAD) -> float:
-        return 1.0 - (cls.distance(vad1, vad2) / cls._MAX_MAGNITUDE)
+        return 1.0 - (cls.distance(vad1, vad2) / cls.MAX_MAGNITUDE)
         
     @property
     def magnitude(self) -> float:
@@ -90,7 +90,7 @@ class VAD:
     
     @property
     def scaled_magnitude(self) -> float:
-        return self.magnitude / self._MAX_MAGNITUDE
+        return self.magnitude / self.MAX_MAGNITUDE
     
     def __eq__(self, other: Any):
         if not isinstance(other, (VAD, dict, Iterable)):
@@ -178,11 +178,11 @@ class Moods:
     
     @classmethod
     def ordinal(cls, n: int) -> str:
-        return cls.MOODS.get(n)
+        return cls.MOODS.get(n, cls.NEUTRAL_MOOD)
     
     @classmethod
     def ordinals(cls, ns: Iterable[int]) -> list[str]:
-        return [cls.ordinal(n) for n in ns]
+        return [cls.MOODS.get(n, cls.NEUTRAL_MOOD) for n in ns]
 
     @classmethod
     def calculate_mood(cls, tested_vad: VAD) -> list[tuple[int, float]]:

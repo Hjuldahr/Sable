@@ -85,6 +85,7 @@ Show curiosity and playfulness in your replies.
             if current_tokens + token_count > self.MAX_CONTEXT_TOKENS:
                 break
 
+            # TODO leave out mentions and add channel/user names
             tag = Tags.ordinal(entry["tag_id"])
             text = entry["text"]
             lines.append(f"{tag} {text}")
@@ -109,6 +110,7 @@ Show curiosity and playfulness in your replies.
         # TODO likes, dislikes, avoidances, passions, etc for extra guidance
 
         top_moods = Moods.label_top_n_moods(vad, 3)
+        top_moods = [top_mood[0] for top_mood in top_moods] # strip distance
         mood_names = Moods.ordinals(top_moods)
         mood_line = f"- Your current mood should be: {', '.join(mood_names)}"
 
