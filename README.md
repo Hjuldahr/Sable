@@ -27,7 +27,7 @@ It is designed for experimentation, learning, and personal server use.
 3. Select the **Discord Server** you want to install the **Discord App**.
 4. Approve the permission requests and accept.
 5. The **App** you created earlier should now be visible on the **Server** as a user with an `APP` indicator next to it and a User Role matching the **App's** name.\
-(The Bot's status should appear as `Offline` at this stage)
+(The Bot's status should appear as `Offline ⚫` at this stage)
 
 ### 3. Environment Variables (.env)
 ***
@@ -95,7 +95,7 @@ This will attempt to perform the following:
 4. Load the Mistral LLM and tokenizer into memory
 5. Start a thread pool executor
 6. Connect to the Discord Bot\
-(If this worked, the Bot's Status will be `Online` instead of `Offline`)
+(If this worked, the Bot's Status will be `Online 🟢` instead of `Offline ⚫`)
 
 ## Stopping the Bot
 Press `Ctrl + C` or close the terminal session (less recommended)
