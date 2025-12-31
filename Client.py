@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from llama_cpp import Path
 
 from components.core.coordinator import Coordinator
+from components.discord.discord_utilities import DiscordUtilities
 
 # ---- env ----
 path = Path(__file__).resolve().parents[0] / '.env'
@@ -20,9 +21,6 @@ client = discord.Client(intents=intents)
 # ---- AI core ----
 ai_user_id = int(os.getenv("BOT_ID")) 
 sable = Coordinator(ai_user_id, 'Sable')
-
-# --- regex ---- 
-mention_or_space = re.compile(r'<@!?\d{17,19}>|\s')
 
 @client.event
 async def on_guild_join(guild: discord.Guild):
@@ -144,9 +142,7 @@ async def on_message(received_message: discord.Message):
     if received_message.author.bot:
         return
     
-    stripped_content = mention_or_space.sub('', received_message.content) if received_message.mentions else received_message.content.strip()
-
-    if stripped_content != "":
+    if not DiscordUtilities.is_mention_only(received_message.content):
         await sable.read(received_message) # Absorb context passively
     
     #await message.channel.send_sound(), tts

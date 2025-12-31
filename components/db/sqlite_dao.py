@@ -199,7 +199,6 @@ class SQLiteDAO:
         async with aiosqlite.connect(self.DB_PATH) as db:
             try:
                 reactions_json = self._json_dump([{'emoji': str(r.emoji), 'count': r.count, 'me': r.me} for r in message.reactions])
-                
                 message_reference_id = (message.reference.message_id or -1) if message.reference is not None else -1
                     
                 await db.execute(

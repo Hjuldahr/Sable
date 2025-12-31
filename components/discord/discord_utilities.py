@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+import re
 from markitdown import MarkItDown
 from urlextract import URLExtract
 from typing import Any, Dict, List
@@ -8,6 +9,9 @@ import discord
 class DiscordUtilities:
     PATH_ROOT = Path(__file__).resolve().parents[2]
     ATTACHMENT_PATH = PATH_ROOT / 'data' / 'discord' / 'attachments'
+    
+    MENTION_REGEX = re.compile(r'<[@#][!&]?\d{17,20}>|@everyone|@here')
+    MENTION_ONLY_REGEX = re.compile(r'^(?:\s|<(?:@!|@&|@|#)\d{17,20}>|@everyone|@here)+$')
     
     def __init__(self):
         self.markdown = MarkItDown()
@@ -56,3 +60,13 @@ class DiscordUtilities:
             'attachments': attachments or {},
             'reactions': reactions or [],
         }
+        
+    @classmethod
+    def strip_mentions(cls, text: str, repl='') -> str:
+        # <[@#][!&]?\d{17,20}>|@everyone|@here
+        return cls.MENTION_REGEX.sub(repl, text)
+    
+    @classmethod
+    def is_mention_only(cls, text: str) -> bool:
+        # ^(?:\s|<(?:@!|@&|@|#)\d{17,20}>|@everyone|@here)+$
+        return bool(cls.MENTION_ONLY_REGEX.match(text))

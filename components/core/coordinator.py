@@ -122,6 +122,9 @@ class Coordinator:
         for i in range(len(entries)):
             entries[i]['tag_id'] = Tags.AI if entries[i]['user_id'] == self.ai_user_id else Tags.USER
 
+        # TODO convert channel_id to channel_name
+        # TODO convert user_id to user_name
+
         content, token_count = await self.llm.generate_text(self.vad, entries)
         extracted = await self.nlp.extract_all(content)
         
