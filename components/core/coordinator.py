@@ -118,10 +118,26 @@ class Coordinator:
     async def write(self, message: discord.Message) -> str:
         entries = await self.dao.select_messages_by_channel(message.channel.id)
 
-        # TEMP fix
-        for i in range(len(entries)):
-            entries[i]['tag_id'] = Tags.AI if entries[i]['user_id'] == self.ai_user_id else Tags.USER
+        user_memories = {}
+        # In future, allow AI to create nicknames for people it likes
 
+        # Fetch DB context
+        for i in range(len(entries)):
+            entry = entries[i]
+            
+            user_id = entry['user_id']
+            tag_id = Tags.AI if user_id == self.ai_user_id else Tags.USER
+
+            if user_id not in user_memories:
+                user_memory = await self.dao.select_user_memory(user_id)
+                user_memories[user_id] = user_memory
+                
+            entry['user_name'] = user_memories[user_id]['user_name']
+            entry['channel_name'] = message.channel.name
+            entry['tag_id'] = tag_id
+            
+            entries[i] = entry
+                
         # TODO convert channel_id to channel_name
         # TODO convert user_id to user_name
 

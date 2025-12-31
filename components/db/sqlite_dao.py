@@ -227,6 +227,7 @@ class SQLiteDAO:
                     if not attachment.ephemeral:
                         await self.upsert_attachment(db, message.id, attachment)
                 await db.commit()
+                
             except Exception as err:
                 await db.rollback()
                 print(f"Upsert message failed: {err}")
