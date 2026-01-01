@@ -443,7 +443,23 @@ class SQLiteDAO:
     async def select_persona_transient(self, category: str) -> list[dict[str, Any]]:
         try:
             async with aiosqlite.connect(self.DB_PATH) as db:
-                return await self.fetch_all_dicts(db, "SELECT * FROM PersonaTransient WHERE category=?", (category,))
+                return await self.fetch_all_dicts(db, "SELECT * FROM PersonaTransient WHERE category=? ORDER BY added_on", (category,))
+        except aiosqlite.Error as err:
+            print(f"Select persona transient failed: {err}")
+            return []
+        
+    async def select_persona_transient_all(self) -> dict[str,list[dict[str, Any]]]:
+        try:
+            async with aiosqlite.connect(self.DB_PATH) as db:
+                rows = await self.fetch_all_dicts(
+                    db,
+                    "SELECT * FROM PersonaTransient ORDER BY category, added_on"
+                )
+                grouped = defaultdict(list)
+                for row in rows:
+                    cat = row.pop('category')
+                    grouped[cat].append(row)
+                return dict(grouped)
         except aiosqlite.Error as err:
             print(f"Select persona transient failed: {err}")
             return []

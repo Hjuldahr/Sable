@@ -1,16 +1,18 @@
 import asyncio
 import atexit
 from concurrent.futures import ThreadPoolExecutor
-import re
-from typing import Any, Iterable
 from pathlib import Path
+import re
+from typing import Any, Iterable, Dict, Tuple, List
 
+import discord
 from urlextract import URLExtract
 from llama_cpp import Llama
 from markitdown import MarkItDown
 
 from .moods import VAD, Moods
 from .tags import Tags
+from ..discord.reactions import ReactionSelector
 
 class LLMUtilities:
     INSTRUCTION = """You are Sable, a playful, and curious AI companion.
@@ -23,16 +25,16 @@ Respond politely to rudeness and steer the conversation positively.
 Show curiosity and playfulness in your replies.
 """
 
-    PATH_ROOT = Path(__file__).resolve().parents[2]
-    LLM_PATH = PATH_ROOT / "model" / "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+    PATH_ROOT: Path = Path(__file__).resolve().parents[2]
+    LLM_PATH: Path = PATH_ROOT / "model" / "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
 
-    MAX_CONTEXT_TOKENS = 2**12
-    RESERVED_OUTPUT_TOKENS = 255
-    
-    LOWEST_TEMP = 0.2
-    HIGHEST_TEMP = 0.9
-    
-    NORM_TEXT_REGEX = (
+    MAX_CONTEXT_TOKENS: int = 2**12
+    RESERVED_OUTPUT_TOKENS: int = 255
+
+    LOWEST_TEMP: float = 0.2
+    HIGHEST_TEMP: float = 0.9
+
+    NORM_TEXT_REGEX: Tuple[Tuple[re.Pattern, str], ...] = (
         (re.compile(r'(<br\s*/?>|&nbsp;)', re.I), ' '),
         (re.compile(r'[\r\n]+'), ' '),
         (re.compile(r'[^\x20-\x7E]'), ''),
@@ -53,13 +55,14 @@ Show curiosity and playfulness in your replies.
             max_workers=n_threads,
             thread_name_prefix="sable_llm"
         )
-        
+
         self.url_extractor = URLExtract()
         self.markdown = MarkItDown()
-        
+        self.reaction_selector = ReactionSelector()
+
         atexit.register(self._close)
-        
-    def _close(self):
+
+    def _close(self) -> None:
         self.executor.shutdown()
         self.llm.close()
 
@@ -77,70 +80,59 @@ Show curiosity and playfulness in your replies.
 
     def build_context_prompt(self, entries: Iterable[dict[str, Any]]) -> str:
         current_tokens = self.RESERVED_OUTPUT_TOKENS
-        lines: list[str] = []
+        lines: List[str] = []
 
         for entry in reversed(entries):
             token_count = entry["token_count"]
-
             if current_tokens + token_count > self.MAX_CONTEXT_TOKENS:
                 break
 
-            # TODO leave out mentions and add channel/user names
             tag = Tags.ordinal(entry["tag_id"])
-            text = entry["text"]
-            lines.append(f"{tag} {text}")
-
+            lines.append(f"{tag} {entry['text']}")
             current_tokens += token_count
 
         return "\n".join(reversed(lines))
 
     def build_instruction_prompt(
-        self, 
-        vad: VAD, 
-        persona_transient: dict[str, Any], 
+        self,
+        vad: VAD,
+        persona_transient: dict[str, Any],
         user_memory_transient: dict[str, Any]
     ) -> str:
         header = f"{Tags.AI_TAG} {self.INSTRUCTION.strip()}"
+        parts: List[str] = []
 
-        parts = []
-        if 'likes' in persona_transient and persona_transient['likes']:
-            line = f"- You like: {', '.join(persona_transient['likes'])}" 
-            parts.append(line)
-        if 'dislikes' in persona_transient and persona_transient['dislikes']:
-            line = f"- You dislike: {', '.join(persona_transient['dislikes'])}"
-            parts.append(line)
-        if 'avoidances' in persona_transient and persona_transient['avoidances']:
-            line = f"- You should avoid discussing: {', '.join(persona_transient['avoidances'])}" 
-            parts.append(line)
-        if 'passions' in persona_transient and persona_transient['passions']:
-            line = f"- You are passionate about: {', '.join(persona_transient['passions'])}" 
-            parts.append(line)
-        if 'name' in user_memory_transient and user_memory_transient['name']:    
-            if 'likes' in user_memory_transient and user_memory_transient['likes']:
-                line = f"- You know {user_memory_transient['name']} likes: {', '.join(user_memory_transient['likes'])}" 
-                parts.append(line)
-            if 'dislikes' in user_memory_transient and user_memory_transient['dislikes']:
-                line = f"- You know {user_memory_transient['name']} dislikes: {', '.join(user_memory_transient['dislikes'])}" 
-                parts.append(line)
-            if 'wants' in user_memory_transient and user_memory_transient['wants']:
-                line = f"- You know {user_memory_transient['name']} wants: {', '.join(user_memory_transient['wants'])}" 
-                parts.append(line)
-            if 'needs' in user_memory_transient and user_memory_transient['needs']:
-                line = f"- You know {user_memory_transient['name']} needs: {', '.join(user_memory_transient['needs'])}" 
-                parts.append(line)
-            if 'facts' in user_memory_transient and user_memory_transient['facts']:
-                line = f"- You know: {', '.join(user_memory_transient['facts'])}, about {user_memory_transient['name']}"
-                parts.append(line)
-            if 'taboos' in user_memory_transient and user_memory_transient['taboos']:
-                line = f"- You know: {user_memory_transient['name']} does want to talk about: {', '.join(user_memory_transient['taboos'])}" 
-                parts.append(line)
+        for key in ("likes", "dislikes", "avoidances", "passions"):
+            if key in persona_transient and persona_transient[key]:
+                label = {
+                    "likes": "You like",
+                    "dislikes": "You dislike",
+                    "avoidances": "You should avoid discussing",
+                    "passions": "You are passionate about"
+                }[key]
+                parts.append(f"- {label}: {', '.join(persona_transient[key])}")
 
-        top_moods = Moods.label_top_n_moods(vad, 3)
-        top_moods = [top_mood[0] for top_mood in top_moods] # strip distance
-        mood_names = Moods.ordinals(top_moods)
-        mood_line = f"- Your current mood should be: {', '.join(mood_names)}"
+        if "name" in user_memory_transient and user_memory_transient["name"]:
+            name = user_memory_transient["name"]
+            for key, label in {
+                "likes": "likes",
+                "dislikes": "dislikes",
+                "wants": "wants",
+                "needs": "needs",
+                "facts": "you know",
+                "taboos": "does want to talk about"
+            }.items():
+                if key in user_memory_transient and user_memory_transient[key]:
+                    val = ", ".join(user_memory_transient[key])
+                    if key == "facts":
+                        parts.append(f"- You know: {val}, about {name}")
+                    else:
+                        parts.append(f"- You know {name} {label}: {val}")
 
-        return "\n".join((header, mood_line))
+        top_moods = [m[0] for m in Moods.label_top_n_moods(vad, 3)]
+        mood_line = f"- Your current mood should be: {', '.join(Moods.ordinals(top_moods))}"
+
+        return "\n".join((header, mood_line, *parts))
 
     # ---------- Generation ----------
 
@@ -148,20 +140,12 @@ Show curiosity and playfulness in your replies.
         return new_min + ((value - old_min) / (old_max - old_min)) * (new_max - new_min)
 
     def sync_generate(self, prompt: str, temperature: float = 0.7) -> dict[str, Any]:
-        return self.llm(
-            prompt,
-            max_tokens=self.RESERVED_OUTPUT_TOKENS,
-            temperature=temperature,
-            stream=False,
-        )
+        return self.llm(prompt, max_tokens=self.RESERVED_OUTPUT_TOKENS, temperature=temperature, stream=False)
 
-    def extract_from_output(self, output: dict[str, Any]) -> tuple[str, int]:
+    def extract_from_output(self, output: dict[str, Any]) -> Tuple[str, int]:
         text = output["choices"][0]["text"]
-
-        # Trim hallucinated user turns
         if Tags.USER_TAG in text:
             text = text.split(Tags.USER_TAG, 1)[0].rstrip()
-
         token_count = output["usage"]["completion_tokens"]
         return text, token_count
 
@@ -169,55 +153,35 @@ Show curiosity and playfulness in your replies.
         self,
         vad: VAD,
         entries: Iterable[dict[str, Any]],
-        persona: dict[str, Any], 
+        persona: dict[str, Any],
         user_memory_transient: dict[str, Any]
-    ) -> tuple[str, int]:
+    ) -> Tuple[str, int]:
         instruction = self.build_instruction_prompt(vad, persona, user_memory_transient)
         context = self.build_context_prompt(entries)
 
-        prompt = (
-            f"{instruction}\n"
-            f"{context}\n"
-            f"{Tags.AI_TAG}"
-        )
-        
-        temperature = self.remap(vad.arousal, VAD.LOW, VAD.HIGH, self.LOWEST_TEMP, self.HIGHEST_TEMP) 
-        # top_p = 0.9
+        prompt = f"{instruction}\n{context}\n{Tags.AI_TAG}"
+        temperature = self.remap(vad.arousal, VAD.LOW, VAD.HIGH, self.LOWEST_TEMP, self.HIGHEST_TEMP)
 
         loop = asyncio.get_running_loop()
-        output = await loop.run_in_executor(
-            self.executor,
-            self.sync_generate,
-            prompt,
-            temperature,
-        )
+        output = await loop.run_in_executor(self.executor, self.sync_generate, prompt, temperature)
 
         return self.extract_from_output(output)
-    
-    def normalize_text_for_tokenization(self, text: str) -> str:
-        """
-        Normalize raw text (Markdown, HTML, logs, code) for LLM tokenization.
-        
-        - Replaces various line breaks (\n, \r\n, <br>, &nbsp;) with spaces
-        - Collapses multiple whitespace into a single space
-        - Preserves URLs, file paths, and code-like structures
-        - Removes control characters except basic punctuation
-        """
-        for (regex, repl) in self.NORM_TEXT_REGEX:
-            text = regex.sub(repl, text)
 
+    # ---------- Text normalization ----------
+
+    def normalize_text_for_tokenization(self, text: str) -> str:
+        for regex, repl in self.NORM_TEXT_REGEX:
+            text = regex.sub(repl, text)
         return text.strip()
-    
-    async def summarize_files(self, attachments: list[Path], max_chars: int = 500) -> dict[str, str]:
-        """
-        Summarizes all attachment markdowns for prompt injection.
-        Run before generate_text if a message contains attachments or URLs.
-        """
-        summaries = {}
+
+    # ---------- Summarization ----------
+
+    async def summarize_files(self, attachments: List[Path], max_chars: int = 500) -> Dict[str, str]:
+        summaries: Dict[str, str] = {}
+
         for filepath in attachments:
             md = self.markdown.convert_local(filepath)
-            text = str(md)  # raw Markdown or URL content
-            text = self.normalize_text_for_tokenization(text)
+            text = self.normalize_text_for_tokenization(str(md))
 
             current_tokens = self.RESERVED_OUTPUT_TOKENS
             i = 0
@@ -227,36 +191,29 @@ Show curiosity and playfulness in your replies.
                     break
                 current_tokens += tokens
                 i += len(word) + 1
-
             text = text[:i].rstrip()
-            
-            prompt = f"Summarize the file {filepath.name}, into concise key points (max {max_chars} characters):\n\n{text}"
+
+            prompt = f"Summarize the file {filepath.name} into concise key points (max {max_chars} chars):\n\n{text}"
             try:
-                output = await asyncio.get_running_loop().run_in_executor(
-                    self.executor, self.sync_generate, prompt, 0.5
-                )
+                output = await asyncio.get_running_loop().run_in_executor(self.executor, self.sync_generate, prompt, 0.5)
                 summary_text, _ = self.extract_from_output(output)
-                summary_text = summary_text[:max_chars].strip() or "No content to summarize"
-                summaries[filepath.name] = summary_text
+                summaries[filepath.name] = summary_text[:max_chars].strip() or "No content to summarize"
             except Exception as e:
                 print(f"Failed summarizing {filepath}: {e}")
+
         return summaries
-    
+
     async def embed_url_summaries(self, source_text: str, max_chars: int = 250) -> str:
-        """
-        Substitutes URLs in text with inline summaries.
-        """
         try:
             urls = self.url_extractor.find_urls(source_text, only_unique=True)
         except Exception as err:
-            print(f'Failed extracting urls: {err}')
+            print(f"Failed extracting URLs: {err}")
             return source_text
 
         for url in urls:
             try:
                 md = self.markdown.convert_url(url)
-                text = str(md)  # raw Markdown or URL content
-                text = self.normalize_text_for_tokenization(text)
+                text = self.normalize_text_for_tokenization(str(md))
 
                 current_tokens = self.RESERVED_OUTPUT_TOKENS
                 i = 0
@@ -266,34 +223,15 @@ Show curiosity and playfulness in your replies.
                         break
                     current_tokens += tokens
                     i += len(word) + 1
-
                 text = text[:i].rstrip()
 
-                prompt = f"Summarize the web resource {url}, into concise key points (max {max_chars} characters):\n\n{text}"
-
-                output = await asyncio.get_running_loop().run_in_executor(
-                    self.executor,
-                    self.sync_generate,
-                    prompt,
-                    0.5
-                )
-
+                prompt = f"Summarize the web resource {url} into concise key points (max {max_chars} chars):\n\n{text}"
+                output = await asyncio.get_running_loop().run_in_executor(self.executor, self.sync_generate, prompt, 0.5)
                 summary_text, _ = self.extract_from_output(output)
                 summary_text = summary_text[:max_chars].strip() or "No content to summarize"
 
-                source_text = source_text.replace(
-                    url,
-                    f'[{summary_text}]({url})'
-                )
-
+                source_text = source_text.replace(url, f'[{summary_text}]({url})')
             except Exception as e:
                 print(f"Failed summarizing {url}: {e}")
 
         return source_text
-    
-    def select_reaction(
-        self,
-        vad: VAD,
-        entries: Iterable[dict[str, Any]]
-    ) -> str:
-        pass

@@ -1,162 +1,127 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import random
 from typing import Any
 import discord
 
-from components.discord.discord_utilities import DiscordUtilities
 from components.ai.nlp_utilities import NLPUtilities
 from components.ai.llm_utilities import LLMUtilities
-from components.ai.tags import Tags
-from components.ai.moods import VAD, Moods
-
+from components.ai.moods import VAD, Moods, VADWords
 from components.db.sqlite_dao import SQLiteDAO
+from components.discord.discord_utilities import DiscordUtilities
+from components.discord.reactions import ReactionSelector
+
+from .context import ContextBuilder
+
+
+# self.persona_likes = await self.dao.select_persona_transient('like') # topics that increases AI engagement
+# self.persona_dislikes = await self.dao.select_persona_transient('dislike') #topics that decreases AI engagement
+# self.persona_avoidances = await self.dao.select_persona_transient('avoidances') # topics the AI doesnt want to talk about (fears, etc)
+# self.persona_passions = await self.dao.select_persona_transient('passions') # topics the AI wants to talk about or learn about (hobbies, coding, etc)
+
+# transient refers to any data that should expire over time
+
+# Use memory_transient for storing and retrieving persona-like data for interacted users
+# (Tune output based on likes, dislikes, learned_trivia, etc (can be anything so long as its categorized consistently))
+
+# Output should combine AI Persona + user profile of the person directly @mentioning the AI + Chat History (with file attachments and embedded link references)
+# Input and Output should also update the DiscordMessage, DiscordAttachment, Persona, UserMemory, PersonaTransient and UserMemoryTransient as appropiate
+# Ie: Input should update user and conversational data. Output should update AI and conversational data.
+
+# Use normalized (0-1) VAD (valence, arousal, dominance) values to model present emotional state of the AI
+
+#Methods needed
+#Input: Listen(message: discord.Message) -> None. Upsert a message
+#Output: Speak(mention/prompt: discord.Message) -> Upsert + Send message via channel & client
+#Output: Emote(message: discord.Message). Add a fitting reaction to the incoming message if it matches heuristics (so its not on every message)
+
+# Behavioural Stack
+# Prompt (Singleton) = Core Immutable Traits
+# Persona (Singleton)(personality_traits, subject_history) = Long Term
+# UserMemory (one per user)(personality_traits, subject_history) = Long Term
+# PersonaTransient (expring, multiple for AI)(Likes, Dislikes, Avoidances, Passions) = Medium Term
+# UserMemoryTransient (expring, multiple per user)(Likes, Dislikes, Learned Facts, Wants, Needs, Taboos, etc) = Medium Term
+# DiscordMessage / DiscordAttachments / DiscordChannels (Raw Context) = Short Term 
+# VAD (Derivational Emotion Space) = Session Term
+# VAD determines temperature and mood cue. Memories dictate prompt biases. Messages injects historical context. 
 
 class Coordinator:
-    CONTEXT_TOKENS = 32768
-    MAX_HISTORY = 1000
-    PRUNE_HISTORY = 750
-    RESERVED_OUTPUT_TOKENS = 255
-    BASE_TEMP = 0.7
-    BASE_LENGTH = 64
-    
-    INSTRUCTION = """You are Sable, a friendly, playful, and curious AI companion. 
-    Be warm and engaging, but prioritize accuracy when needed. 
-    Only share your origin or name meaning if asked: created by Nioreux on December 21, 2025, name inspired by Martes zibellina. 
-    Give clear answers with examples or reasoning when helpful. 
-    Explain reasoning if asked; otherwise, keep it brief. 
-    If unsure, label assumptions or offer options. 
-    Make jokes natural and relevant. 
-    Respond politely to rudeness and steer the conversation positively. 
-    Show curiosity and playfulness in your replies."""
-
-    def __init__(self, 
-                ai_user_id: int, 
-                ai_user_name='Sable',
-                n_threads=4):
+    def __init__(self, ai_user_id: int, ai_user_name='Sable', n_threads=4):
 
         self.ai_user_id = ai_user_id
         self.ai_user_name = ai_user_name
         
         # ---- Runtime State ----
-        # VAD - Defaults to neutral
         self.vad = VAD(Moods.NEUTRAL)
-        # Token Counted Context
-        self.context_window = []
         
+        # ---- Components ----
         self.discord = DiscordUtilities()
         self.nlp = NLPUtilities()
         self.llm = LLMUtilities()
+        self.context_builder = ContextBuilder(ai_user_id)
+        self.reactions = ReactionSelector()
         
         # ---- DAO Setup ----
         
         self.dao: SQLiteDAO = None
         
-        # ---- Multithreading Setup ----
-        
-        self.executor = ThreadPoolExecutor(max_workers=n_threads, thread_name_prefix=self.ai_user_name)
-        self.conversation_history_lock = asyncio.Lock()
-        
     async def async_init(self):
         # ---- Runtime State Setup ----
-        # await self.dao.run_setup_script()
-        
         self.dao = await SQLiteDAO.create()
         self.persona_state = await self.dao.select_persona()
         
-        # self.persona_likes = await self.dao.select_persona_transient('like') # topics that increases AI engagement
-        # self.persona_dislikes = await self.dao.select_persona_transient('dislike') #topics that decreases AI engagement
-        # self.persona_avoidances = await self.dao.select_persona_transient('avoidances') # topics the AI doesnt want to talk about (fears, etc)
-        # self.persona_passions = await self.dao.select_persona_transient('passions') # topics the AI wants to talk about or learn about (hobbies, coding, etc)
+    async def read(self, message: discord.Message): 
+        results = await self.discord.extract_from_message(self.ai_user_id, message) 
+        extracted = await self.nlp.extract_all(message.content) 
+        # is too slow with my current hardware so its currently disabled from use 
+        # results['content'] = await self.llm.embed_url_summaries(results['content']) 
         
-        # transient refers to any data that should expire over time
+        token_count = self.llm.token_estimator(message.content) 
+        await self.dao.upsert_message(message, token_count) 
         
-        # Use memory_transient for storing and retrieving persona-like data for interacted users
-        # (Tune output based on likes, dislikes, learned_trivia, etc (can be anything so long as its categorized consistently))
-        
-        # Output should combine AI Persona + user profile of the person directly @mentioning the AI + Chat History (with file attachments and embedded link references)
-        # Input and Output should also update the DiscordMessage, DiscordAttachment, Persona, UserMemory, PersonaTransient and UserMemoryTransient as appropiate
-        # Ie: Input should update user and conversational data. Output should update AI and conversational data.
-        
-        # Use normalized (0-1) VAD (valence, arousal, dominance) values to model present emotional state of the AI
-        
-        #Methods needed
-        #Input: Listen(message: discord.Message) -> None. Upsert a message
-        #Output: Speak(mention/prompt: discord.Message) -> Upsert + Send message via channel & client
-        #Output: Emote(message: discord.Message). Add a fitting reaction to the incoming message if it matches heuristics (so its not on every message)
-        
-        # Behavioural Stack
-        # Prompt (Singleton) = Core Immutable Traits
-        # Persona (Singleton)(personality_traits, subject_history) = Long Term
-        # UserMemory (one per user)(personality_traits, subject_history) = Long Term
-        # PersonaTransient (expring, multiple for AI)(Likes, Dislikes, Avoidances, Passions) = Medium Term
-        # UserMemoryTransient (expring, multiple per user)(Likes, Dislikes, Learned Facts, Wants, Needs, Taboos, etc) = Medium Term
-        # DiscordMessage / DiscordAttachments / DiscordChannels (Raw Context) = Short Term 
-        # VAD (Derivational Emotion Space) = Session Term
-        # VAD determines temperature and mood cue. Memories dictate prompt biases. Messages injects historical context. 
-        
-    async def read(self, message: discord.Message):
-        results = await self.discord.extract_from_message(self.ai_user_id, message)
-        extracted = await self.nlp.extract_all(message.content)
-        # results['content'] = await self.llm.embed_url_summaries(results['content'])
-        token_count = self.llm.token_estimator(message.content)
-        
-        await self.dao.upsert_message(message, token_count)
-        
-        for category, entries in extracted.items():
-            for entry in entries:
-                await self.dao.insert_memory_transient({
-                    'user_id': message.author.id,
-                    'entry': entry,
-                    'category': category
-                })
-        
-        print(results)
+        # replace with execute many if the repeated connections becomes an issue
+        for category, entries in extracted.items(): 
+            for entry in entries: 
+                await self.dao.insert_memory_transient({'user_id': message.author.id, 'entry': entry, 'category': category}) 
+                
+        self.update_vad_from_message(message)
     
-    async def write(self, message: discord.Message) -> str:
+    async def write(self, message):
         entries = await self.dao.select_messages_by_channel(message.channel.id)
 
-        # In future, allow AI to create nicknames for people it likes
+        user_memory = await self.dao.select_memory_transient_category_grouped(
+            message.author.id
+        )
 
-        # Fetch DB context
-        for i in range(len(entries)):
-            entry = entries[i]
-            
-            user_id = entry['user_id']
-            tag_id = Tags.AI if user_id == self.ai_user_id else Tags.USER
+        context = self.context_builder.build(
+            entries,
+            user_memory,
+            message.channel.name
+        )
 
-            if user_id not in user_memory_transient:
-                user_memory = await self.dao.select_user_memory(user_id)
-                user_memory_transient[user_id] = user_memory
-                
-            entry['user_name'] = user_memory_transient[user_id]['user_name']
-            entry['channel_name'] = message.channel.name
-            entry['tag_id'] = tag_id
-            
-            entries[i] = entry
-        
-        persona_transient = {}
-        for category in ('likes', 'dislikes', 'avoidances', 'passions'):
-            persona_transient[category] = await self.dao.select_persona_transient(category)
-            
-        user_memory_transient = await self.dao.select_memory_transient_category_grouped(message.author.id)
-        
-        persona = await self.dao.select_persona()
+        persona = await self.dao.select_persona_transient_all()
 
-        content, token_count = await self.llm.generate_text(self.vad, entries, persona_transient, user_memory_transient)
-        extracted = await self.nlp.extract_all(content)
-        
-        for category, entries in extracted.items():
-            for entry in entries:
-                await self.dao.insert_memory_transient({
-                    'user_id': self.ai_user_id,
-                    'entry': entry,
-                    'category': category
-                })
-        
+        content, token_count = await self.llm.generate_text(
+            self.vad, context, persona, user_memory
+        )
+
         return content, token_count
     
-    async def emote(self, prompt: discord.Message):
-        pass
+    async def emote(self, message: discord.Message):
+        transient_persona = await self.dao.select_persona_transient_all()
+        emoji = self.reactions.select_reaction(self.vad, transient_persona, message)
+        if emoji:
+            await message.add_reaction(emoji)
     
+    def update_vad_from_message(self, message: discord.Message):
+        text = message.clean_content.lower()
+        self.vad = VADWords.score(text)
+
+        # ---- Perturbation ----
+        self.vad.valence += random.uniform(-0.1, 0.1)
+        self.vad.arousal += random.uniform(-0.1, 0.1)
+        self.vad.dominance += random.uniform(-0.05, 0.05)
+        
     def close(self):
-        pass
+        # add global shutdown hooks here if distributed register.atexit causes issues
+        print("Coordinator Shutdown")

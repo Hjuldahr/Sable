@@ -2,9 +2,10 @@ import asyncio
 import atexit
 from concurrent.futures import ThreadPoolExecutor
 import re
-from typing import Iterable
-import discord
+from typing import Iterable, List, Dict
 import nltk
+import discord
+
 
 class NLPUtilities:
     GENERIC_NOUNS = {
@@ -35,25 +36,25 @@ class NLPUtilities:
         re.compile(r"\bi spend a lot of time\b(.+)", re.I),
     )
 
-    def __init__(self, n_threads = 2):
-        if not nltk.data.find("tokenizers/punkt", None):
-            nltk.download("punkt", quiet=True)
-        if not nltk.data.find("taggers/averaged_perceptron_tagger", None):
-            nltk.download("averaged_perceptron_tagger", quiet=True)
-        if not nltk.data.find("corpora/stopwords", None):
-            nltk.download("stopwords", quiet=True)
+    def __init__(self, n_threads: int = 2):
+        # Ensure nltk corpora are available
+        for pkg in ("tokenizers/punkt", "taggers/averaged_perceptron_tagger", "corpora/stopwords"):
+            try:
+                nltk.data.find(pkg)
+            except LookupError:
+                nltk.download(pkg.split("/")[-1], quiet=True)
+
         self.nltk_stop_words = set(nltk.corpus.stopwords.words("english"))
-        
+
         self.executor = ThreadPoolExecutor(
-            max_workers=n_threads, 
-            thread_name_prefix='sable_nlp'
+            max_workers=n_threads,
+            thread_name_prefix="sable_nlp"
         )
-        
         atexit.register(self._close)
 
     # ---------- Internal helpers ----------
-    
-    def _close(self):
+
+    def _close(self) -> None:
         self.executor.shutdown()
 
     def _clean_phrase(self, text: str) -> str:
@@ -62,20 +63,16 @@ class NLPUtilities:
         text = self.NORM_WHITESPACE_REGEX.sub(" ", text)
         return text.lower()
 
-    def _extract_noun_phrases(self, text: str) -> list[str]:
+    def _extract_noun_phrases(self, text: str) -> List[str]:
         tokens = nltk.word_tokenize(text)
         tagged = nltk.pos_tag(tokens)
 
-        phrases: list[str] = []
-        current: list[str] = []
+        phrases: List[str] = []
+        current: List[str] = []
 
         for word, tag in tagged:
             w = word.lower()
-            if (
-                tag.startswith("NN")
-                and w not in self.nltk_stop_words
-                and w not in self.GENERIC_NOUNS
-            ):
+            if tag.startswith("NN") and w not in self.nltk_stop_words and w not in self.GENERIC_NOUNS:
                 current.append(word)
             else:
                 if current:
@@ -87,28 +84,22 @@ class NLPUtilities:
 
         return phrases
 
-    def _extract_content(
-        self,
-        text: str,
-        regx_set: Iterable[re.Pattern],
-    ) -> list[str]:
-        contents: list[str] = []
+    def _extract_content(self, text: str, regex_set: Iterable[re.Pattern]) -> List[str]:
+        contents: List[str] = []
 
-        for regx in regx_set:
-            match = regx.search(text)
+        for regex in regex_set:
+            match = regex.search(text)
             if not match:
                 continue
 
             tail = match.group(match.lastindex)
-
-            # Cut off contrast clauses: "but", "however", etc.
             tail = self.CONTRAST_SPLIT_REGEX.split(tail, maxsplit=1)[0]
 
             phrases = self._extract_noun_phrases(tail)
             contents.extend(phrases)
 
-        cleaned = []
-        seen = set()
+        cleaned: List[str] = []
+        seen: set[str] = set()
 
         for phrase in contents:
             cleaned_phrase = self._clean_phrase(phrase)
@@ -120,19 +111,19 @@ class NLPUtilities:
 
     # ---------- Public extractors ----------
 
-    def extract_likes(self, text: str) -> list[str]:
+    def extract_likes(self, text: str) -> List[str]:
         return self._extract_content(text, self.FIND_LIKES_REGEX)
 
-    def extract_dislikes(self, text: str) -> list[str]:
+    def extract_dislikes(self, text: str) -> List[str]:
         return self._extract_content(text, self.FIND_DISLIKES_REGEX)
 
-    def extract_avoidances(self, text: str) -> list[str]:
+    def extract_avoidances(self, text: str) -> List[str]:
         return self._extract_content(text, self.FIND_AVOIDANCES_REGEX)
 
-    def extract_passions(self, text: str) -> list[str]:
+    def extract_passions(self, text: str) -> List[str]:
         return self._extract_content(text, self.FIND_PASSIONS_REGEX)
-    
-    async def extract_all(self, text: str) -> dict[str, list[str]]:
+
+    async def extract_all(self, text: str) -> Dict[str, List[str]]:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self.executor,
@@ -140,10 +131,10 @@ class NLPUtilities:
             text
         )
 
-    def _extract_all_sync(self, text: str) -> dict[str, list[str]]:
+    def _extract_all_sync(self, text: str) -> Dict[str, List[str]]:
         return {
-            'likes': self._extract_content(text, self.FIND_LIKES_REGEX),
-            'dislikes': self._extract_content(text, self.FIND_DISLIKES_REGEX),
-            'avoidances': self._extract_content(text, self.FIND_AVOIDANCES_REGEX),
-            'passions': self._extract_content(text, self.FIND_PASSIONS_REGEX),
+            "likes": self.extract_likes(text),
+            "dislikes": self.extract_dislikes(text),
+            "avoidances": self.extract_avoidances(text),
+            "passions": self.extract_passions(text),
         }
