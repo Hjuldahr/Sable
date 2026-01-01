@@ -40,11 +40,6 @@ class Coordinator:
         # ---- Runtime State ----
         # VAD - Defaults to neutral
         self.vad = VAD(Moods.NEUTRAL)
-        # Decaying AI Biases
-        self.persona_likes: list[dict[str, Any]] = []
-        self.persona_dislikes: list[dict[str, Any]]  = []
-        self.persona_avoidances: list[dict[str, Any]]  = []
-        self.persona_passions: list[dict[str, Any]]  = []
         # Token Counted Context
         self.context_window = []
         
@@ -54,24 +49,26 @@ class Coordinator:
         
         # ---- DAO Setup ----
         
-        self.dao = SQLiteDAO()
+        self.dao: SQLiteDAO = None
         
         # ---- Multithreading Setup ----
         
         self.executor = ThreadPoolExecutor(max_workers=n_threads, thread_name_prefix=self.ai_user_name)
         self.conversation_history_lock = asyncio.Lock()
         
-    async def runtime_setup(self):
+    async def async_init(self):
         # ---- Runtime State Setup ----
         # await self.dao.run_setup_script()
         
+        self.dao = await SQLiteDAO.create()
         self.persona_state = await self.dao.select_persona()
         
+        # self.persona_likes = await self.dao.select_persona_transient('like') # topics that increases AI engagement
+        # self.persona_dislikes = await self.dao.select_persona_transient('dislike') #topics that decreases AI engagement
+        # self.persona_avoidances = await self.dao.select_persona_transient('avoidances') # topics the AI doesnt want to talk about (fears, etc)
+        # self.persona_passions = await self.dao.select_persona_transient('passions') # topics the AI wants to talk about or learn about (hobbies, coding, etc)
+        
         # transient refers to any data that should expire over time
-        self.persona_likes = await self.dao.select_persona_transient('like') # topics that increases AI engagement
-        self.persona_dislikes = await self.dao.select_persona_transient('dislike') #topics that decreases AI engagement
-        self.persona_avoidances = await self.dao.select_persona_transient('avoidances') # topics the AI doesnt want to talk about (fears, etc)
-        self.persona_passions = await self.dao.select_persona_transient('passions') # topics the AI wants to talk about or learn about (hobbies, coding, etc)
         
         # Use memory_transient for storing and retrieving persona-like data for interacted users
         # (Tune output based on likes, dislikes, learned_trivia, etc (can be anything so long as its categorized consistently))
@@ -118,7 +115,6 @@ class Coordinator:
     async def write(self, message: discord.Message) -> str:
         entries = await self.dao.select_messages_by_channel(message.channel.id)
 
-        user_memories = {}
         # In future, allow AI to create nicknames for people it likes
 
         # Fetch DB context
@@ -128,20 +124,25 @@ class Coordinator:
             user_id = entry['user_id']
             tag_id = Tags.AI if user_id == self.ai_user_id else Tags.USER
 
-            if user_id not in user_memories:
+            if user_id not in user_memory_transient:
                 user_memory = await self.dao.select_user_memory(user_id)
-                user_memories[user_id] = user_memory
+                user_memory_transient[user_id] = user_memory
                 
-            entry['user_name'] = user_memories[user_id]['user_name']
+            entry['user_name'] = user_memory_transient[user_id]['user_name']
             entry['channel_name'] = message.channel.name
             entry['tag_id'] = tag_id
             
             entries[i] = entry
-                
-        # TODO convert channel_id to channel_name
-        # TODO convert user_id to user_name
+        
+        persona_transient = {}
+        for category in ('likes', 'dislikes', 'avoidances', 'passions'):
+            persona_transient[category] = await self.dao.select_persona_transient(category)
+            
+        user_memory_transient = await self.dao.select_memory_transient_category_grouped(message.author.id)
+        
+        persona = await self.dao.select_persona()
 
-        content, token_count = await self.llm.generate_text(self.vad, entries)
+        content, token_count = await self.llm.generate_text(self.vad, entries, persona_transient, user_memory_transient)
         extracted = await self.nlp.extract_all(content)
         
         for category, entries in extracted.items():

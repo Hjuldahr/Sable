@@ -94,20 +94,46 @@ Show curiosity and playfulness in your replies.
 
         return "\n".join(reversed(lines))
 
-    def build_instruction_prompt(self, vad: VAD) -> str:
+    def build_instruction_prompt(
+        self, 
+        vad: VAD, 
+        persona_transient: dict[str, Any], 
+        user_memory_transient: dict[str, Any]
+    ) -> str:
         header = f"{Tags.AI_TAG} {self.INSTRUCTION.strip()}"
 
-        # likes_line = f"- You like: {', '.join(likes)}" 
-        # dislikes_line = f"- You dislike: {', '.join(dislikes)}"
-        # avoidances_line = f"- You should avoid discussing: {', '.join(avoidances)}" 
-        # passions_line = f"- You are passionate about: {', '.join(passions)}" 
-        # user_likes_line = f"- You know {user_name} likes: {', '.join(user_likes)}" 
-        # user_dislikes_line = f"- You know {user_name} dislikes: {', '.join(user_dislikes)}" 
-        # user_wants_line = f"- You know {user_name} wants: {', '.join(user_wants)}" 
-        # user_needs_line = f"- You know {user_name} needs: {', '.join(user_needs)}" 
-        # user_facts_line = f"- You know: {', '.join(user_facts)}, about {user_name}" 
-        # user_taboo_line = f"- You know: {user_name} does want to talk about: {', '.join(user_taboos)}" 
-        # TODO likes, dislikes, avoidances, passions, etc for extra guidance
+        parts = []
+        if 'likes' in persona_transient and persona_transient['likes']:
+            line = f"- You like: {', '.join(persona_transient['likes'])}" 
+            parts.append(line)
+        if 'dislikes' in persona_transient and persona_transient['dislikes']:
+            line = f"- You dislike: {', '.join(persona_transient['dislikes'])}"
+            parts.append(line)
+        if 'avoidances' in persona_transient and persona_transient['avoidances']:
+            line = f"- You should avoid discussing: {', '.join(persona_transient['avoidances'])}" 
+            parts.append(line)
+        if 'passions' in persona_transient and persona_transient['passions']:
+            line = f"- You are passionate about: {', '.join(persona_transient['passions'])}" 
+            parts.append(line)
+        if 'name' in user_memory_transient and user_memory_transient['name']:    
+            if 'likes' in user_memory_transient and user_memory_transient['likes']:
+                line = f"- You know {user_memory_transient['name']} likes: {', '.join(user_memory_transient['likes'])}" 
+                parts.append(line)
+            if 'dislikes' in user_memory_transient and user_memory_transient['dislikes']:
+                line = f"- You know {user_memory_transient['name']} dislikes: {', '.join(user_memory_transient['dislikes'])}" 
+                parts.append(line)
+            if 'wants' in user_memory_transient and user_memory_transient['wants']:
+                line = f"- You know {user_memory_transient['name']} wants: {', '.join(user_memory_transient['wants'])}" 
+                parts.append(line)
+            if 'needs' in user_memory_transient and user_memory_transient['needs']:
+                line = f"- You know {user_memory_transient['name']} needs: {', '.join(user_memory_transient['needs'])}" 
+                parts.append(line)
+            if 'facts' in user_memory_transient and user_memory_transient['facts']:
+                line = f"- You know: {', '.join(user_memory_transient['facts'])}, about {user_memory_transient['name']}"
+                parts.append(line)
+            if 'taboos' in user_memory_transient and user_memory_transient['taboos']:
+                line = f"- You know: {user_memory_transient['name']} does want to talk about: {', '.join(user_memory_transient['taboos'])}" 
+                parts.append(line)
 
         top_moods = Moods.label_top_n_moods(vad, 3)
         top_moods = [top_mood[0] for top_mood in top_moods] # strip distance
@@ -143,8 +169,10 @@ Show curiosity and playfulness in your replies.
         self,
         vad: VAD,
         entries: Iterable[dict[str, Any]],
+        persona: dict[str, Any], 
+        user_memory_transient: dict[str, Any]
     ) -> tuple[str, int]:
-        instruction = self.build_instruction_prompt(vad)
+        instruction = self.build_instruction_prompt(vad, persona, user_memory_transient)
         context = self.build_context_prompt(entries)
 
         prompt = (

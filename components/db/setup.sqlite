@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS AIStateSnapshot (
 CREATE TABLE IF NOT EXISTS PersonaTransient (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry TEXT,
-    category TEXT,           -- e.g., like, dislike, interest
+    category TEXT,           -- e.g., likes, dislikes, interests
     added_on INTEGER DEFAULT (strftime('%s','now'))
 );
 
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS UserMemoryTransient (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     entry TEXT,
-    category TEXT,           -- e.g., like, dislike, learned fact
+    category TEXT,           -- e.g., likes, dislikes, learned facts
     added_on INTEGER DEFAULT (strftime('%s','now'))
 );
 

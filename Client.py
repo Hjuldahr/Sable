@@ -1,7 +1,5 @@
 import asyncio
-from collections import deque
 import os
-import re
 import signal
 import discord
 from dotenv import load_dotenv
@@ -222,5 +220,5 @@ if __name__ == "__main__":
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")
     if not TOKEN:
         raise RuntimeError("DISCORD_BOT_TOKEN not found in .env")
-    asyncio.run(sable.runtime_setup())
+    asyncio.run(sable.async_init())
     client.run(TOKEN)

@@ -9,14 +9,14 @@ import discord
 class DiscordUtilities:
     PATH_ROOT = Path(__file__).resolve().parents[2]
     ATTACHMENT_PATH = PATH_ROOT / 'data' / 'discord' / 'attachments'
-    
+
     MENTION_REGEX = re.compile(r'<[@#][!&]?\d{17,20}>|@everyone|@here')
     MENTION_ONLY_REGEX = re.compile(r'^(?:\s|<(?:@!|@&|@|#)\d{17,20}>|@everyone|@here)+$')
-    
+
     def __init__(self):
         self.markdown = MarkItDown()
         self.extractor = URLExtract()
-    
+
     async def extract_attachments_from_message(self, message: discord.Message) -> Dict[Path, Dict[str, str]]:
         attachments = {}
         if message.attachments:
@@ -31,7 +31,7 @@ class DiscordUtilities:
                 except (discord.HTTPException, discord.NotFound) as e:
                     print(f"Error saving attachment {child_path}: {e}")
         return attachments
-    
+
     async def extract_reactions_from_message(self, ai_user_id: int, message: discord.Message) -> List[Dict[str, Any]]:
         reactions = []
         if message.reactions:
