@@ -201,6 +201,7 @@ class Moods:
         return [cat_id for cat_id, _ in cls.calculate_mood(vad)[:n]]
 
 class VADWords:
+    # Crude estimates
     VALENCE_MAP = {
         "love": 0.7,
         "awesome": 0.8,
@@ -234,38 +235,40 @@ class VADWords:
         "should": 0.2
     }
 
-    @classmethod
-    def score_valence(cls, text: str) -> float:
-        text_lower = text.lower()
-        valence_scores = [score for word, score in cls.VALENCE_MAP.items() if word in text_lower]
-        if not valence_scores:
-            return 0.0
-        # average, weighted toward stronger words
-        return sum(valence_scores) / len(valence_scores)
+    AROUSAL_ENDINGS = tuple(sorted(AROUSAL_MAP, key=len, reverse=True))
 
-    @classmethod
-    def score_arousal(cls, text: str) -> float:
-        # pick the strongest matching arousal cue from punctuation
-        text = text.strip()
-        scores = []
-        for ending, score in cls.AROUSAL_MAP.items():
-            pattern = re.escape(ending) + r'$'  # match at the end
-            if re.search(pattern, text):
-                scores.append(score)
-        return max(scores) if scores else 0.0
-
-    @classmethod
-    def score_dominance(cls, text: str) -> float:
-        text_lower = text.lower()
-        dom_scores = [score for word, score in cls.DOMINANCE_MAP.items() if word in text_lower]
-        return sum(dom_scores) if dom_scores else 0.0
+    WORD_RE = re.compile(r"[a-z']+")
 
     @classmethod
     def score(cls, text: str) -> VAD:
-        new_vad = VAD(
-            valence=cls.score_valence(text),
-            arousal=cls.score_arousal(text),
-            dominance=cls.score_dominance(text)
-        )
-        new_vad.category_id = Moods.label_mood(new_vad)
-        return new_vad
+        text_l = text.lower()
+        tokens = cls.WORD_RE.findall(text_l)
+
+        val_scores = []
+        dom_sum = 0.0
+
+        for tok in tokens:
+            if tok in cls.VALENCE_MAP:
+                s = cls.VALENCE_MAP[tok]
+                val_scores.append(s)
+            if tok in cls.DOMINANCE_MAP:
+                dom_sum += cls.DOMINANCE_MAP[tok]
+
+        # valence: weighted emphasis
+        if val_scores:
+            val = sum(s * abs(s) for s in val_scores) / sum(abs(s) for s in val_scores)
+        else:
+            val = 0.0
+
+        dom = max(-1.0, min(1.0, dom_sum))
+
+        aro = 0.0
+        t = text.rstrip()
+        for ending in cls.AROUSAL_ENDINGS:
+            if t.endswith(ending):
+                aro = cls.AROUSAL_MAP[ending]
+                break
+
+        vad = VAD(valence=val, arousal=aro, dominance=dom)
+        vad.category_id = Moods.label_mood(vad)
+        return vad
