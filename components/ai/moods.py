@@ -1,9 +1,11 @@
 from __future__ import annotations
+from collections import defaultdict
+import csv
 from math import isclose, sqrt
+from pathlib import Path
 import re
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Sequence, SupportsFloat
 import random
-
 
 class VAD:
     VALENCE_CATEGORY = "valence"
@@ -14,24 +16,22 @@ class VAD:
     HIGH = 1.0
     MAX_MAGNITUDE = sqrt(3)
 
-    def __init__(self, category_id: int = -1, valence: float = 0.0, arousal: float = 0.0, dominance: float = 0.0):
-        self.category_id = category_id
+    def __init__(self, valence: SupportsFloat = 0.0, arousal: SupportsFloat = 0.0, dominance: SupportsFloat = 0.0, label: Any = None):
+        self.label = label
         self._valence = valence
         self._arousal = arousal
         self._dominance = dominance
 
     @classmethod
-    def _constrain(cls, value: float) -> float:
-        if not isinstance(value, (int, float)):
-            raise TypeError(f"Invalid Datatype: {value}. Must be int or float.")
-        return min(max(cls.LOW, value), cls.HIGH)
+    def _constrain(cls, value: SupportsFloat) -> float:
+        return min(max(cls.LOW, float(value)), cls.HIGH)
 
     @property
     def valence(self) -> float:
         return self._valence
 
     @valence.setter
-    def valence(self, valence: float):
+    def valence(self, valence: SupportsFloat):
         self._valence = self._constrain(valence)
 
     @property
@@ -39,7 +39,7 @@ class VAD:
         return self._arousal
 
     @arousal.setter
-    def arousal(self, arousal: float):
+    def arousal(self, arousal: SupportsFloat):
         self._arousal = self._constrain(arousal)
 
     @property
@@ -47,13 +47,13 @@ class VAD:
         return self._dominance
 
     @dominance.setter
-    def dominance(self, dominance: float):
+    def dominance(self, dominance: SupportsFloat):
         self._dominance = self._constrain(dominance)
 
     def __iter__(self):
-        yield self.valence
-        yield self.arousal
-        yield self.dominance
+        yield self._valence
+        yield self._arousal
+        yield self._dominance
 
     def to_list(self) -> list[float]:
         return list(self)
@@ -156,15 +156,15 @@ class Moods:
         EXCITED: "excited",
     }
 
-    VADS: tuple[VAD, ...] = (
-        VAD(JOYFUL, 0.75, 0.5, 0.5),
-        VAD(ANGRY, -0.625, 0.625, 0.625),
-        VAD(FEARFUL, -0.75, 0.625, -0.625),
-        VAD(SAD, -0.75, -0.625, -0.625),
-        VAD(CALM, 0.5, -0.625, 0.375),
-        VAD(BORED, -0.375, -0.75, -0.375),
-        VAD(EXCITED, 0.625, 0.875, 0.625),
-        VAD(NEUTRAL, 0.0, 0.0, 0.0),
+    VADS: tuple[VAD] = (
+        VAD(0.75, 0.5, 0.5, JOYFUL),
+        VAD(-0.625, 0.625, 0.625, ANGRY),
+        VAD(-0.75, 0.625, -0.625, FEARFUL),
+        VAD(-0.75, -0.625, -0.625, SAD),
+        VAD(0.5, -0.625, 0.375, CALM),
+        VAD(-0.375, -0.75, -0.375, BORED),
+        VAD(0.625, 0.875, 0.625, EXCITED),
+        VAD(0.0, 0.0, 0.0, NEUTRAL),
     )
 
     @classmethod
@@ -178,7 +178,7 @@ class Moods:
     @classmethod
     def calculate_mood(cls, tested_vad: VAD) -> list[tuple[int, float]]:
         results = sorted(
-            ((label_vad.category_id, VAD.similarity(tested_vad, label_vad)) for label_vad in cls.VADS),
+            ((label_vad.label, VAD.similarity(tested_vad, label_vad)) for label_vad in cls.VADS),
             key=lambda r: r[1],
             reverse=True,
         )
@@ -201,74 +201,61 @@ class Moods:
         return [cat_id for cat_id, _ in cls.calculate_mood(vad)[:n]]
 
 class VADWords:
-    # Crude estimates
-    VALENCE_MAP = {
-        "love": 0.7,
-        "awesome": 0.8,
-        "adore": 0.9,
-        "like": 0.5,
-        "yay": 0.6,
-        "hate": -0.7,
-        "awful": -0.8,
-        "loathe": -0.9,
-        "dislike": -0.5,
-        "ugh": -0.6
-    }
-
-    AROUSAL_MAP = {
-        "!": 0.5,
-        "!?": 0.75,
-        "!!": 0.8,
-        "?!": 0.7,
-        "?": 0.25,
-        "...": -0.05
-    }
-
-    DOMINANCE_MAP = {
-        "please": -0.2,
-        "mandatory": 0.4,
-        "required": 0.35,
-        "must": 0.3,
-        "could": 0.1,
-        "perhaps": -0.1,
-        "can't": -0.3,
-        "should": 0.2
-    }
-
-    AROUSAL_ENDINGS = tuple(sorted(AROUSAL_MAP, key=len, reverse=True))
+    word_vad_mapping: dict[str, VAD] = {}
 
     WORD_RE = re.compile(r"[a-z']+")
+
+    # Optional punctuation-based arousal cues
+    AROUSAL_OVERRIDES = {
+        "!!": 0.8,
+        "!?": 0.75,
+        "?!": 0.7,
+        "!": 0.5,
+        "?": 0.25,
+        "...": -0.05,
+    }
+    # Pre-sort endings by length so longer ones match first
+    AROUSAL_ENDINGS = tuple(sorted(AROUSAL_OVERRIDES, key=len, reverse=True))
+
+    @classmethod
+    def load(cls, path: Path):
+        import csv
+        with open(path, 'r', newline='') as file:
+            reader = csv.DictReader(file)
+            cls.word_vad_mapping = {row['label']: VAD(**row) for row in reader}
+
+    @staticmethod
+    def weighted_avg(scores: list[float]) -> float:
+        total_weight = sum(abs(s) for s in scores)
+        return sum(s * abs(s) for s in scores) / total_weight if total_weight else 0.0
 
     @classmethod
     def score(cls, text: str) -> VAD:
         text_l = text.lower()
-        tokens = cls.WORD_RE.findall(text_l)
+        tokens: list[str] = cls.WORD_RE.findall(text_l)
+        category_scores = [[],[],[]]
 
-        val_scores = []
-        dom_sum = 0.0
+        # Lookup VAD for each token (direct attribute access for speed)
+        for token in tokens:
+            vad = cls.word_vad_mapping.get(token)
+            if vad is not None:
+                category_scores[0].append(vad.valence)
+                category_scores[1].append(vad.arousal)
+                category_scores[2].append(vad.dominance)
 
-        for tok in tokens:
-            if tok in cls.VALENCE_MAP:
-                s = cls.VALENCE_MAP[tok]
-                val_scores.append(s)
-            if tok in cls.DOMINANCE_MAP:
-                dom_sum += cls.DOMINANCE_MAP[tok]
+        # Compute weighted averages
+        category_score_averages = [
+            cls.weighted_avg(scores)
+            for scores in category_scores
+        ]
 
-        # valence: weighted emphasis
-        if val_scores:
-            val = sum(s * abs(s) for s in val_scores) / sum(abs(s) for s in val_scores)
-        else:
-            val = 0.0
-
-        dom = max(-1.0, min(1.0, dom_sum))
-
-        aro = 0.0
-        t = text.rstrip()
+        # Apply optional punctuation-based arousal override (highest matching)
+        stripped_text = text.rstrip()
         for ending in cls.AROUSAL_ENDINGS:
-            if t.endswith(ending):
-                aro = cls.AROUSAL_MAP[ending]
+            if stripped_text.endswith(ending):
+                category_score_averages[1] = cls.AROUSAL_OVERRIDES[ending]
                 break
 
-        vad = VAD(valence=val, arousal=aro, dominance=dom)
-        vad.category_id = Moods.label_mood(vad)
+        vad = VAD(*category_score_averages)
+        vad.label = Moods.label_mood(vad)
         return vad
