@@ -235,7 +235,7 @@ class VADWords:
         tokens: list[str] = cls.WORD_RE.findall(text_l)
         category_scores = [[],[],[]]
 
-        # Lookup VAD for each token (direct attribute access for speed)
+        # Lookup VAD for each token
         for token in tokens:
             vad = cls.word_vad_mapping.get(token)
             if vad is not None:
@@ -249,7 +249,7 @@ class VADWords:
             for scores in category_scores
         ]
 
-        # Apply optional punctuation-based arousal override (highest matching)
+        # Apply punctuation-based arousal override (highest matching)
         stripped_text = text.rstrip()
         for ending in cls.AROUSAL_ENDINGS:
             if stripped_text.endswith(ending):
