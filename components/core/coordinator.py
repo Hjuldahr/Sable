@@ -1,5 +1,6 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 import random
 from typing import Any
 import discord
@@ -47,6 +48,7 @@ from .context import ContextBuilder
 
 class Coordinator:
     def __init__(self, ai_user_id: int, ai_user_name='Sable', n_threads=4):
+        VADWords.load()
 
         self.ai_user_id = ai_user_id
         self.ai_user_name = ai_user_name
@@ -83,8 +85,6 @@ class Coordinator:
         for category, entries in extracted.items(): 
             for entry in entries: 
                 await self.dao.insert_memory_transient({'user_id': message.author.id, 'entry': entry, 'category': category}) 
-                
-        self.update_vad_from_message(message)
     
     async def write(self, message):
         entries = await self.dao.select_messages_by_channel(message.channel.id)
@@ -101,26 +101,32 @@ class Coordinator:
 
         persona = await self.dao.select_persona_transient_all()
 
+        message_vad = VADWords.score(message.content)
+        temp_vad = VAD(*self.vad)
+        temp_vad.merge(message_vad, 0.2)
+
         content, token_count = await self.llm.generate_text(
-            self.vad, context, persona, user_memory
+            temp_vad, context, persona, user_memory
         )
+
+        self.update_vad_from_message(content, message_vad)
 
         return content, token_count
     
+    def update_vad_from_message(self, text: str, message_vad: VAD):
+        output_vad = VADWords.score(text)
+        self.vad.decay()
+        self.vad.double_merge(
+            message_vad, 0.125,
+            output_vad, 0.25
+        )
+        self.vad.pertubate()
+        
     async def emote(self, message: discord.Message):
         transient_persona = await self.dao.select_persona_transient_all()
         emoji = self.reactions.select_reaction(self.vad, transient_persona, message)
         if emoji:
             await message.add_reaction(emoji)
-    
-    def update_vad_from_message(self, message: discord.Message):
-        text = message.clean_content.lower()
-        self.vad = VADWords.score(text)
-
-        # ---- Perturbation ----
-        self.vad.valence += random.uniform(-0.1, 0.1)
-        self.vad.arousal += random.uniform(-0.1, 0.1)
-        self.vad.dominance += random.uniform(-0.05, 0.05)
         
     def close(self):
         # add global shutdown hooks here if distributed register.atexit causes issues

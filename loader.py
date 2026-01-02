@@ -14,7 +14,7 @@ try:
     with open(path, mode='w', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(["label", "valence", "arousal", "dominance"])
-        writer.writerows(row.split() for row in response.text.splitlines() if row.strip())
+        writer.writerows(row.split('\t') for row in response.text.splitlines() if row.strip())
         
 except Exception as e:
     print(f"An error occurred: {e}")

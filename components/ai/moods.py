@@ -135,6 +135,28 @@ class VAD:
     def __repr__(self) -> str:
         return f"VAD(valence={self.valence:.2f}, arousal={self.arousal:.2f}, dominance={self.dominance:.2f})"
 
+    def decay(self):
+        self.valence *= random.uniform(0.91 if self.valence > 0 else 0.93, 0.95)
+        self.arousal *= random.uniform(0.70, 0.85)
+        self.dominance *= random.uniform(0.85, 0.90)
+        
+    def pertubate(self):
+        self.valence += random.uniform(-0.01, 0.01)
+        self.arousal += random.uniform(-0.01, 0.01)
+        self.dominance += random.uniform(-0.02, 0.02) 
+        
+    def merge(self, other: VAD, factor: float):
+        this_factor = max(0.0, 1.0 - factor)
+        self.valence = self.valence * this_factor + other.valence * factor
+        self.arousal = self.arousal * this_factor + other.arousal * factor  
+        self.dominance = self.dominance * this_factor + other.dominance * factor
+        
+    def double_merge(self, other_1: VAD, factor_1: float, other_2: VAD, factor_2: float):
+        this_factor = max(0.0, 1.0 - factor_1 - factor_2)
+        self.valence = self.valence * this_factor + other_1.valence * factor_1 + other_2.valence * factor_2
+        self.arousal = self.arousal * this_factor + other_1.arousal * factor_1 + other_2.arousal * factor_2
+        self.dominance = self.dominance * this_factor + other_1.dominance * factor_1 + other_2.dominance * factor_2
+
 class Moods:
     ANGRY = 0
     BORED = 1
@@ -203,22 +225,36 @@ class Moods:
 class VADWords:
     word_vad_mapping: dict[str, VAD] = {}
 
-    WORD_RE = re.compile(r"[a-z']+")
+    # Tokenization regex
+    WORD_REGEX = re.compile(r"[a-z']+", re.I)
 
-    # Optional punctuation-based arousal cues
-    AROUSAL_OVERRIDES = {
-        "!?": 0.75,
-        "?!": 0.75,
-        "!": 0.5,
-        "?": 0.25,
-        "...": -0.05,
+    # Arousal affixes
+    AROUSAL_PREFIX_REGEX = re.compile(r"^\.{3}")
+    AROUSAL_PREFIXES = {
+        "...": -0.05
     }
-    # Pre-sort endings by length so longer ones match first
-    AROUSAL_ENDINGS = tuple(sorted(AROUSAL_OVERRIDES, key=len, reverse=True))
+    AROUSAL_SUFFIX_REGEX = re.compile(r"(\.{3}|!|\?)$")
+    AROUSAL_SUFFIXES = {
+        "...!": 0.05,
+        "...?": 0.02,
+        "...": -0.02,
+        "???": 0.05,
+        "!!!": 0.10,
+        "!?": 0.07,
+        "?!": 0.07,
+        "?": 0.03,
+        "!": 0.06,
+        ".": -0.05
+    }
+    SHOUTING_REGEX = re.compile(r"^(?:[^a-z]*[A-Z]+.+)+$")
+    SHOUTING_OFFSET = 0.09
+
+    # Simple negation words
+    NEGATIONS = {"not", "never", "no", "n't"}
 
     @classmethod
-    def load(cls, path: Path):
-        import csv
+    def load(cls):
+        path = Path(__file__).resolve().parents[2] / 'data' / 'nrc-vad' / 'NRC-Bipolar-VAD-Lexicon.csv'
         with open(path, 'r', newline='') as file:
             reader = csv.DictReader(file)
             cls.word_vad_mapping = {row['label']: VAD(**row) for row in reader}
@@ -230,31 +266,40 @@ class VADWords:
 
     @classmethod
     def score(cls, text: str) -> VAD:
-        text_l = text.lower()
-        tokens: list[str] = cls.WORD_RE.findall(text_l)
-        category_scores = [[],[],[]]
+        tokens: list[str] = cls.WORD_REGEX.findall(text)
+        category_scores = [[], [], []]  # valence, arousal, dominance
 
-        # Lookup VAD for each token
-        for token in tokens:
+        for i, token in enumerate(tokens):
             vad = cls.word_vad_mapping.get(token)
-            if vad is not None:
-                category_scores[0].append(vad.valence)
-                category_scores[1].append(vad.arousal)
-                category_scores[2].append(vad.dominance)
+            if vad is None:
+                continue
 
-        # Compute weighted averages
+            # Check for negation within a window of 3 tokens before
+            # handles both double negation and normal negation (not unhappy -> --valence -> +valence | not happy -> -valence)
+            negated = any(prev in cls.NEGATIONS for prev in tokens[max(0, i - 3):i])
+
+            # Apply negation by flipping valence
+            category_scores[0].append(-vad.valence if negated else vad.valence)
+            category_scores[1].append(vad.arousal)
+            category_scores[2].append(vad.dominance)
+
+        # Weighted averages per category
         category_score_averages = [
-            cls.weighted_avg(scores)
-            for scores in category_scores
+            cls.weighted_avg(scores) for scores in category_scores
         ]
 
-        # Apply punctuation-based arousal override (highest matching)
-        stripped_text = text.rstrip()
-        for ending in cls.AROUSAL_ENDINGS:
-            if stripped_text.endswith(ending):
-                category_score_averages[1] = cls.AROUSAL_OVERRIDES[ending]
-                break
+        # Apply punctuation-based arousal offsets
+        match = cls.AROUSAL_PREFIX_REGEX.search(text)
+        if match:
+            category_score_averages[1] += cls.AROUSAL_PREFIXES.get(match.group(), 0)
+
+        match = cls.AROUSAL_SUFFIX_REGEX.search(text)
+        if match:
+            category_score_averages[1] += cls.AROUSAL_SUFFIXES.get(match.group(), 0)
+
+        if cls.SHOUTING_REGEX.match(text.strip()):
+            category_score_averages[1] += cls.SHOUTING_OFFSET
 
         vad = VAD(*category_score_averages)
-        vad.label = Moods.label_mood(vad)
+        #vad.label = Moods.label_mood(vad)
         return vad
