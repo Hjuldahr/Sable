@@ -207,9 +207,8 @@ class VADWords:
 
     # Optional punctuation-based arousal cues
     AROUSAL_OVERRIDES = {
-        "!!": 0.8,
         "!?": 0.75,
-        "?!": 0.7,
+        "?!": 0.75,
         "!": 0.5,
         "?": 0.25,
         "...": -0.05,
