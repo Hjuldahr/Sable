@@ -4,6 +4,7 @@ import random
 import re
 import signal
 import discord
+from discord.ext import commands
 from dotenv import load_dotenv
 from llama_cpp import Path
 
@@ -16,7 +17,8 @@ load_dotenv(path)
 
 # ---- client ----
 intents = discord.Intents.all()
-client = discord.Client(intents=intents)
+#client = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ---- AI core ----
 ai_user_id = int(os.getenv("BOT_ID")) 

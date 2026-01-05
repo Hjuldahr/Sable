@@ -12,9 +12,6 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from llama_cpp import Llama
 
-global is_hushed
-is_hushed = False
-
 FAREWELL_LINES = (
     "It's getting dark...", 
     "Is it curfew time already?",
@@ -109,6 +106,22 @@ async def generate(history: list[discord.Message]):
     
     return output_text
 
+async def allow_reply(message: discord.Message) -> bool:
+    if bot.user is not None and bot.user in message.mentions:
+        return True
+
+    if message.reference:
+        reference = message.reference
+        if reference.resolved:
+            return reference.resolved.author.id == ai_user_id
+        else:
+            try:
+                msg = data[reference.guild_id][reference.channel_id]['messages'][reference.message_id]
+                return msg.author.id == ai_user_id
+            except Exception:
+                return False
+    return False
+
 @bot.event
 async def on_message(in_message: discord.Message):
     if in_message.author.bot:
@@ -119,7 +132,9 @@ async def on_message(in_message: discord.Message):
     in_message_id = in_message.id
     
     if guild_id not in data:
-        data[guild_id] = {}
+        data[guild_id] = {
+            'is_silenced': False
+        }
     
     if channel_id not in data[guild_id]:
         data[guild_id][channel_id] = {
@@ -130,23 +145,36 @@ async def on_message(in_message: discord.Message):
     else:
         data[guild_id][channel_id]['messages'][in_message_id] = in_message
         
-        replying_to = in_message.reference.message_id if in_message.reference else None
+        reference_id = in_message.reference.message_id if in_message.reference else None
         
-        if replying_to and replying_to in data[guild_id][channel_id]['sequence']:
-            i = data[guild_id][channel_id]['sequence'].index(replying_to)
+        if reference_id and reference_id in data[guild_id][channel_id]['sequence']:
+            i = data[guild_id][channel_id]['sequence'].index(reference_id)
             data[guild_id][channel_id]['sequence'].insert(max(i - 1, 0), in_message_id)
         else:
             data[guild_id][channel_id]['sequence'].append(in_message_id)
     
-    history = [data[guild_id][channel_id]['messages'][message_id] for message_id in data[guild_id][channel_id]['sequence']]
+    reference = in_message.reference
     
-    async with in_message.channel.typing():
-        content = await generate(history)
+    if bot.user is not None and bot.user in in_message.mentions:
+        allow_reply = True
+
+    elif reference:
+        if reference.resolved:
+            allow_reply = reference.resolved.author.id == ai_user_id
+        else:
+            message = data[reference.guild_id][reference.channel_id]['messages'][reference.message_id]
+            allow_reply = message.author.id == ai_user_id
+            
+    if not data[guild_id]['is_silenced'] and allow_reply:
+        history = [data[guild_id][channel_id]['messages'][message_id] for message_id in data[guild_id][channel_id]['sequence']]
         
-    reply = await in_message.reply(content)
-    
-    data[guild_id][channel_id]['messages'][reply.id] = reply
-    data[guild_id][channel_id]['sequence'].append(reply.id)
+        async with in_message.channel.typing():
+            content = await generate(history)
+            
+        reply = await in_message.reply(content)
+        
+        data[guild_id][channel_id]['messages'][reply.id] = reply
+        data[guild_id][channel_id]['sequence'].append(reply.id)
 
 @bot.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
@@ -182,7 +210,7 @@ async def on_ready():
     
     for guild in bot.guilds:
         guild_id = guild.id
-        data[guild_id] = {}
+        data[guild_id] = {'is_silenced': False}
         me = guild.me
         
         for channel in guild.text_channels:
@@ -210,30 +238,35 @@ async def safe_shutdown():
     llm.close()
     await bot.close()
     
-def permission_check(ctx: commands.Context=None): 
-    return ctx is not None and not ctx.author.guild_permissions.administrator   
+async def permission_check(ctx):
+    return ctx.author.guild_permissions.administrator
     
 @bot.command(name="shutdown")
-async def shutdown_command(ctx: commands.Context=None):
-    global is_hushed
-    
-    if permission_check(ctx):
+async def shutdown_command(ctx: commands.Context):
+    if not permission_check(ctx):
         await ctx.send(f"I am sorry {ctx.author.name}, I'm afraid I won't do that.")
         return
 
-    if not is_hushed:
-        await ctx.send(random.shuffle(FAREWELL_LINES)) # randomize later
+    if not data[ctx.guild.id]['is_silenced'] and random.random() < 0.1:
+        await ctx.send(random.choice(FAREWELL_LINES))
+        
     await safe_shutdown()
 
-@bot.command(name="hush")
-async def shush_command(ctx: commands.Context=None):
-    global is_hushed
-    is_hushed = True
+@bot.command(name="mute")
+async def muter_command(ctx: commands.Context):
+    if not permission_check(ctx):
+        await ctx.send(f"I am sorry {ctx.author.name}, I'm afraid I won't do that.")
+        return
     
-@bot.command(name="unhush")
-async def shush_command(ctx: commands.Context=None):
-    global is_hushed
-    is_hushed = True
+    data[ctx.guild.id]['is_silenced'] = True
+    
+@bot.command(name="unmute")
+async def unmute_command(ctx: commands.Context):
+    if not permission_check(ctx):
+        await ctx.send(f"I am sorry {ctx.author.name}, I'm afraid I won't do that.")
+        return
+    
+    data[ctx.guild.id]['is_silenced'] = False
 
 if __name__ == "__main__":
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -242,7 +275,7 @@ if __name__ == "__main__":
         raise RuntimeError("DISCORD_BOT_TOKEN not found in .env")
     
     for s in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(s, shutdown_command)
-    atexit.register(shutdown_command)
+        signal.signal(s, safe_shutdown)
+    atexit.register(safe_shutdown)
     
     bot.run(TOKEN)
