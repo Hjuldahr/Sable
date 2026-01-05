@@ -1,5 +1,7 @@
 import asyncio
 import os
+import random
+import re
 import signal
 import discord
 from dotenv import load_dotenv
@@ -9,7 +11,7 @@ from components.core.coordinator import Coordinator
 from components.discord.discord_utilities import DiscordUtilities
 
 # ---- env ----
-path = Path(__file__).resolve().parents[0] / '.env'
+path = Path(__file__).resolve().parent / '.env'
 load_dotenv(path)
 
 # ---- client ----
@@ -19,6 +21,9 @@ client = discord.Client(intents=intents)
 # ---- AI core ----
 ai_user_id = int(os.getenv("BOT_ID")) 
 sable = Coordinator(ai_user_id, 'Sable')
+
+# ---- regex ----
+TEXT_DISTILLATION_REGEX = re.compile(r'(\W+|<[@#][!&]?\d{17,20}>|@everyone|@here)+')
 
 @client.event
 async def on_guild_join(guild: discord.Guild):
@@ -44,17 +49,16 @@ async def on_guild_join(guild: discord.Guild):
     if guild.system_channel:
         channel = guild.system_channel
         permissions = channel.permissions_for(guild.me)
-        if permissions.send_messages:
+        if permissions.send_messages and permissions.read_messages:
             print(f"I announced my arrival at {guild.name} via '{channel.name}' [ID: {channel.id}]")
             # TODO replace with generated salutation
             await channel.send('Hi everyone! I hope we can be friends!')
 
     # Fall back: Scan for first open text channel (less safe as it may be an improper location for greetings)
     else:
-        channels = sorted(guild.text_channels, key=lambda x: x.position)
-        for channel in channels:
+        for channel in guild.text_channels:
             permissions = channel.permissions_for(guild.me)
-            if permissions.send_messages:
+            if permissions.send_messages and permissions.read_messages:
                 channel_dict = {
                     'id': channel.id,
                     'guild_id': channel.guild.id,
@@ -163,20 +167,43 @@ async def on_message(received_message: discord.Message):
     
     print(f"{received_message.author.id} sent the text message {received_message.id}")
 
+def compare_messages(a: discord.Message, b: discord.Message) -> bool:
+    """Ignore edits that only change whitespace, capitalization, or mentions."""
+    return TEXT_DISTILLATION_REGEX.sub('', a.content.lower()) == TEXT_DISTILLATION_REGEX.sub('', b.content.lower())
+
+# Will remove if it the sense of artificility (not human enough) outweighs the functional benifits
 @client.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
-    if before.author.bot or before.content == after.content:
+    # Ignore edits to bot messages or trivial edits
+    if before.author.bot or compare_messages(before, after):
         return
-    
-    await sable.listen(after)
-    
+
+    await sable.listen(after) # Process the new message content
+
     print(f"{after.author.id} edited the message {before.id}")
 
 @client.event
 async def on_message_delete(message: discord.Message):
+    # Remove the user message from DB
     await sable.dao.delete_message(message.id)
-    
-    print(f"{message.author.id} deleted the message {message.id}")
+
+    # Look up AI reply directly
+    ai_reply = await sable.dao.select_reply(sable.ai_user_id, message.id)
+    if ai_reply is None or ai_reply['references_message_id'] == -1:
+        return
+    ai_reply_id = ai_reply['references_message_id']
+
+    try:
+        ai_reply = await message.channel.fetch_message(ai_reply_id)
+        await ai_reply.delete(delay=random.uniform(0.25, 0.75))
+        await sable.dao.delete_message(ai_reply_id)
+        print(f"{message.author.id} deleted the message {message.id}")
+        
+    except discord.NotFound:
+        await sable.dao.delete_message(ai_reply_id)
+        
+    except Exception as e:
+        print(f"Failed to delete AI reply {ai_reply_id}: {e}")
 
 @client.event
 async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
@@ -215,7 +242,7 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     sable.dao.update_message_reactions(payload.message_id, message.reactions)
     
     print(f"{payload.user_id} retracted {payload.emoji} on {payload.message_id}")
-    
+
 if __name__ == "__main__":
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")
     if not TOKEN:

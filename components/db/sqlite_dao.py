@@ -314,6 +314,18 @@ class SQLiteDAO:
         except aiosqlite.Error as err:
             print(f"Select message failed: {err}")
             return None
+        
+    async def select_reply(self, user_id: int, references_message_id: int) -> dict[str, Any] | None:
+        try:
+            async with aiosqlite.connect(self.DB_PATH) as db:
+                row = await self.fetch_one_dict(db, "SELECT * FROM DiscordMessage WHERE user_id=? AND references_message_id=?", (user_id, references_message_id))
+                if row:
+                    row['created_at'] = self._from_ts(row['created_at'])
+                    row['edited_at'] = self._from_ts(row['edited_at'])
+                return row
+        except aiosqlite.Error as err:
+            print(f"Select reply failed: {err}")
+            return None
 
     async def select_messages_by_channel(self, channel_id: int) -> list[dict[str, Any]]:
         try:

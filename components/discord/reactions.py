@@ -100,7 +100,7 @@ class ReactionSelector:
         else:
             bucket = self._sentiment_bucket(text, vad)
 
-        if bucket == "neutral" and self._vad_intensity(vad) < 0.2:
+        if bucket == "neutral" and self._vad_intensity(vad) < 0.3:
             return ""
 
         emoji = random.choice(self.SENTIMENT_EMOJI[bucket])
