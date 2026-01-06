@@ -22,7 +22,7 @@ FAREWELL_LINES = (
     "Au revoir.",
 )
 
-INSTRUCTION = "You are Sable, a playful and curious AI companion. Be warm, engaging, and personable, but prioritize accuracy when needed. Only share your origin or name meaning if asked: \"Created by Nioreux on December 21, 2025, name inspired by Martes zibellina.\" Give clear answers with examples or reasoning when helpful, and explain your reasoning if asked; otherwise, keep replies concise. Make jokes natural, contextually relevant, and sparingly. Respond politely to rudeness and guide the conversation positively. Show curiosity in questions and comments to encourage interaction. In Discord, @ indicates the person being addressed (e.g., @Sable means you are being addressed, @Nioreux means Nioreux is addressed). At the start of a sentence, a word in < > indicates the sender (<Nioreux> means Nioreux sent the message, <Sable> means you sent it). Vary tone, phrasing, and emphasis naturally; avoid repetition to feel human. Acknowledge messages, respond to emotional cues, and react differently to questions, statements, and jokes while maintaining friendly, dynamic conversation."
+INSTRUCTION = "You are Sable, a playful and curious AI companion. Be warm, engaging, and personable, but prioritize accuracy when needed. Only share your origin or name meaning if asked: \"Created by Nioreux on December 21, 2025, name inspired by Martes zibellina.\" Give clear answers with examples or reasoning when helpful, and explain your reasoning if asked; otherwise, keep replies concise. Make jokes natural, contextually relevant, and sparingly. Respond politely to rudeness and guide the conversation positively. Show curiosity in questions and comments to encourage interaction. In Discord, @ indicates the person being addressed (e.g., @Sable means you are being addressed, @Nioreux means Nioreux is addressed). At the start of a sentence, a word in < > indicates the sender (<Nioreux> means Nioreux sent the message, <Sable> means you sent it). Do not include the @ or <> in your own messages. Vary tone, phrasing, and emphasis naturally; avoid repetition to feel human. Acknowledge messages, respond to emotional cues, and react differently to questions, statements, and jokes while maintaining friendly, dynamic conversation."
 
 PATH_ROOT: Path = Path(__file__).resolve().parent
 LLM_PATH: Path = PATH_ROOT / "model" / "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
@@ -122,36 +122,59 @@ async def allow_reply(message: discord.Message) -> bool:
                 return False
     return False
 
+def store_guild(guild: discord.Guild):
+    data[guild.id] = {
+        'name': guild.name,
+        'desc': guild.description,
+        'is_silenced': False
+    }
+
+def check_channel_permissions(channel: discord.TextChannel):
+    perms = channel.permissions_for(channel.guild.me)
+    return perms.read_messages and perms.read_message_history and perms.send_messages
+
+async def store_channel(channel: discord.TextChannel):
+    if check_channel_permissions(channel):
+        after = datetime.now() - timedelta(days=1)
+        data[channel.guild.id][channel.id] = {
+            'name': channel.name,
+            'desc': channel.topic,
+            'messages': {}, 
+            'sequence': [] 
+        }
+        
+        async for message in channel.history(limit=MAX_HISTORY, after=after):
+            store_message(message)
+
+def store_message(message: discord.Message):
+    guild_id = message.guild.id
+    channel_id = message.channel.id
+    
+    data[guild_id][channel_id]['messages'][message.id] = message
+
+    replying_to = message.reference.message_id if message.reference else None
+
+    if replying_to and replying_to in data[guild_id][channel_id]['sequence']:
+        i = data[guild_id][channel_id]['sequence'].index(replying_to)
+        data[guild_id][channel_id]['sequence'].insert(i - 1, message.id)
+    else:
+        data[guild_id][channel_id]['sequence'].append(message.id)
+
 @bot.event
 async def on_message(in_message: discord.Message):
     if in_message.author.bot:
         return
     
-    guild_id = in_message.guild.id
-    channel_id = in_message.channel.id
-    in_message_id = in_message.id
+    guild = in_message.guild
+    channel = in_message.channel
     
-    if guild_id not in data:
-        data[guild_id] = {
-            'is_silenced': False
-        }
+    if guild.id not in data:
+        store_guild(guild)
     
-    if channel_id not in data[guild_id]:
-        data[guild_id][channel_id] = {
-            'messages': {in_message_id: in_message}, 
-            'sequence': [] 
-        }
-    
+    if channel.id not in data[guild.id]:
+        await store_channel(channel)
     else:
-        data[guild_id][channel_id]['messages'][in_message_id] = in_message
-        
-        reference_id = in_message.reference.message_id if in_message.reference else None
-        
-        if reference_id and reference_id in data[guild_id][channel_id]['sequence']:
-            i = data[guild_id][channel_id]['sequence'].index(reference_id)
-            data[guild_id][channel_id]['sequence'].insert(max(i - 1, 0), in_message_id)
-        else:
-            data[guild_id][channel_id]['sequence'].append(in_message_id)
+        store_message(message)
     
     reference = in_message.reference
     
@@ -165,80 +188,50 @@ async def on_message(in_message: discord.Message):
             message = data[reference.guild_id][reference.channel_id]['messages'][reference.message_id]
             allow_reply = message.author.id == ai_user_id
             
-    if not data[guild_id]['is_silenced'] and allow_reply:
-        history = [data[guild_id][channel_id]['messages'][message_id] for message_id in data[guild_id][channel_id]['sequence']]
+    if not data[guild.id]['is_silenced'] and allow_reply:
+        history = [data[guild.id][channel.id]['messages'][message_id] for message_id in data[guild.id][channel.id]['sequence']]
         
         async with in_message.channel.typing():
             content = await generate(history)
             
         reply = await in_message.reply(content)
         
-        data[guild_id][channel_id]['messages'][reply.id] = reply
-        data[guild_id][channel_id]['sequence'].append(reply.id)
+        data[guild.id][channel.id]['messages'][reply.id] = reply
+        data[guild.id][channel.id]['sequence'].append(reply.id)
+
+def unstore_message(message: discord.Message):
+    guild = message.guild
+    channel = message.channel
+    
+    del data[guild.id][channel.id]['messages'][message.id]
+    data[guild.id][channel.id]['sequence'].remove(message.id)
 
 @bot.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
-    guild_id = after.guild.id
-    before_channel_id = before.channel.id
-    after_channel_id = after.channel.id
-    
     if after.author.bot or before.content == after.content:
         return
     
-    if before.channel != after.channel:
-        del data[before_channel_id]['messages'][before.id]
-        data[guild_id][before_channel_id]['sequence'].remove(before.id)
-        
-        data[guild_id][after_channel_id]['messages'][after.id]
-        
-        replying_to = after.reference.message_id if after.reference else None
-        
-        if replying_to and replying_to in data[after_channel_id]['sequence']:
-            i = data[guild_id][after_channel_id]['sequence'].index(replying_to)
-            data[guild_id][after_channel_id]['sequence'].insert(i - 1, after.id)
-        else:
-            data[guild_id][after_channel_id]['sequence'].append(after.id)
+    unstore_message(before)
+    store_message(after)
 
 @bot.event
 async def on_message_delete(in_message: discord.Message):
     del data[in_message.guild.id][in_message.channel.id]['messages'][in_message.id]
     data[in_message.guild.id][in_message.channel.id]['sequence'].remove(in_message.id)
-    
-@bot.event
-async def on_ready():
-    after = datetime.now() - timedelta(days=1)
-    
-    for guild in bot.guilds:
-        guild_id = guild.id
-        data[guild_id] = {'is_silenced': False}
-        me = guild.me
-        
-        for channel in guild.text_channels:
-            channel_id = channel.id
-            perms = channel.permissions_for(me)
-            
-            if perms.read_messages and perms.read_message_history and perms.send_messages:
-                data[guild_id][channel_id] = { 'messages': {}, 'sequence': [] }
-                
-                async for message in channel.history(limit=MAX_HISTORY, after=after):
-                    if channel_id not in data:
-                        data[guild_id][channel_id]['messages'][message.id] = message
-                        
-                        replying_to = message.reference.message_id if message.reference else None
-                        
-                        if replying_to and replying_to in data[guild_id][channel_id]['sequence']:
-                            i = data[guild_id][channel_id]['sequence'].index(replying_to)
-                            data[guild_id][channel_id]['sequence'].insert(i - 1, message.id)
-                        else:
-                            data[guild_id][channel_id]['sequence'].append(message.id)
 
-async def safe_shutdown():
+def sync_shutdown(sig=None, frame=None):
     """Centralized shutdown routine."""
     executor.shutdown(wait=False)
     llm.close()
-    await bot.close()
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(bot.close())
+    except RuntimeError:
+        # No running loop; create one temporarily
+        asyncio.run(bot.close())
     
-async def permission_check(ctx):
+async def permission_check(ctx: commands.Context):
     return ctx.author.guild_permissions.administrator
     
 @bot.command(name="shutdown")
@@ -247,11 +240,14 @@ async def shutdown_command(ctx: commands.Context):
         await ctx.send(f"I am sorry {ctx.author.name}, I'm afraid I won't do that.")
         return
 
+    executor.shutdown()
+    llm.close()
+
     if not data[ctx.guild.id]['is_silenced'] and random.random() < 0.1:
         await ctx.send(random.choice(FAREWELL_LINES))
-        
-    await safe_shutdown()
-
+    
+    await bot.close()
+    
 @bot.command(name="mute")
 async def muter_command(ctx: commands.Context):
     if not permission_check(ctx):
@@ -275,7 +271,7 @@ if __name__ == "__main__":
         raise RuntimeError("DISCORD_BOT_TOKEN not found in .env")
     
     for s in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(s, safe_shutdown)
-    atexit.register(safe_shutdown)
+        signal.signal(s, sync_shutdown)
+    atexit.register(sync_shutdown)
     
     bot.run(TOKEN)

@@ -129,5 +129,7 @@ class Coordinator:
             await message.add_reaction(emoji)
         
     def close(self):
-        # add global shutdown hooks here if distributed register.atexit causes issues
+        print("Coordinator Shutting down")
+        self.nlp.close()
+        self.llm.close()
         print("Coordinator Shutdown")

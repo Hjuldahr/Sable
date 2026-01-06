@@ -60,9 +60,7 @@ Show curiosity and playfulness in your replies.
         self.markdown = MarkItDown()
         self.reaction_selector = ReactionSelector()
 
-        atexit.register(self._close)
-
-    def _close(self) -> None:
+    def close(self) -> None:
         self.executor.shutdown()
         self.llm.close()
 

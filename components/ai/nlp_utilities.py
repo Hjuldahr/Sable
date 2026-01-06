@@ -50,11 +50,10 @@ class NLPUtilities:
             max_workers=n_threads,
             thread_name_prefix="sable_nlp"
         )
-        atexit.register(self._close)
 
     # ---------- Internal helpers ----------
 
-    def _close(self) -> None:
+    def close(self) -> None:
         self.executor.shutdown()
 
     def _clean_phrase(self, text: str) -> str:

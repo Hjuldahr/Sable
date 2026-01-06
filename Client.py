@@ -1,4 +1,7 @@
 import asyncio
+import atexit
+from datetime import datetime
+import io
 import os
 import random
 import re
@@ -27,7 +30,10 @@ sable = Coordinator(ai_user_id, 'Sable')
 # ---- regex ----
 TEXT_DISTILLATION_REGEX = re.compile(r'(\W+|<[@#][!&]?\d{17,20}>|@everyone|@here)+')
 
-@client.event
+def permission_check(author: discord.Member):
+    return author.guild_permissions.administrator
+
+@bot.event
 async def on_guild_join(guild: discord.Guild):
     # This function runs when the bot joins a new guild
     await sable.dao.upsert_guild(guild)
@@ -76,7 +82,7 @@ async def on_guild_join(guild: discord.Guild):
                 await channel.send('Hello everyone! I have arrived!')
                 break
 
-@client.event
+@bot.event
 async def on_guild_remove(guild: discord.Guild):
     # Attempt to message default channel
     if guild.system_channel:
@@ -98,7 +104,7 @@ async def on_guild_remove(guild: discord.Guild):
 
     await sable.dao.delete_guild(guild.id)
 
-@client.event
+@bot.event
 async def on_guild_channel_update(before, after):
     if isinstance(after, discord.TextChannel):
         me = after.guild.me
@@ -111,22 +117,18 @@ async def on_guild_channel_update(before, after):
             await after.send('Thank you for letting me join yall here!')
             # Action to take when permission is gained
 
-def handle_signal(sig, frame):
-    """Schedule async shutdown on SIGINT/SIGTERM."""
+async def safe_shutdown():
+    """Centralized shutdown routine."""
     sable.close()
-    asyncio.get_running_loop().create_task(client.close()) # fix
-
-# Register signal handlers for Ctrl+C and termination
-for s in (signal.SIGTERM, signal.SIGINT):
-    signal.signal(s, handle_signal)
+    await bot.close()
 
 # --- Discord events ---
-@client.event
+@bot.event
 async def on_ready():
-    print(f'I logged in as [Client: {client.user}]')
+    print(f'I logged in as [Client: {bot.user}]')
 
 async def allow_reply(message: discord.Message) -> bool:
-    if client.user in message.mentions:
+    if bot.user in message.mentions:
         return True
 
     if message.reference:
@@ -141,7 +143,7 @@ async def allow_reply(message: discord.Message) -> bool:
                 return False
     return False
 
-@client.event
+@bot.event
 async def on_message(received_message: discord.Message):
     if received_message.author.bot:
         return
@@ -174,7 +176,7 @@ def compare_messages(a: discord.Message, b: discord.Message) -> bool:
     return TEXT_DISTILLATION_REGEX.sub('', a.content.lower()) == TEXT_DISTILLATION_REGEX.sub('', b.content.lower())
 
 # Will remove if it the sense of artificility (not human enough) outweighs the functional benifits
-@client.event
+@bot.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
     # Ignore edits to bot messages or trivial edits
     if before.author.bot or compare_messages(before, after):
@@ -184,7 +186,7 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
 
     print(f"{after.author.id} edited the message {before.id}")
 
-@client.event
+@bot.event
 async def on_message_delete(message: discord.Message):
     # Remove the user message from DB
     await sable.dao.delete_message(message.id)
@@ -207,47 +209,114 @@ async def on_message_delete(message: discord.Message):
     except Exception as e:
         print(f"Failed to delete AI reply {ai_reply_id}: {e}")
 
-@client.event
+@bot.event
 async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
     message = reaction.message
     sable.dao.update_message_reactions(message.id,message.reactions)
     
     print(f"{user.id} reacted with {reaction.emoji} on {reaction.message.id}")
 
-@client.event
+@bot.event
 async def on_reaction_remove(reaction: discord.Reaction, user: discord.User):
     message = reaction.message
     sable.dao.update_message_reactions(message.id,message.reactions)
     
     print(f"{user.id} retracted {reaction.emoji} for {reaction.message.id}")
 
-@client.event
+@bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    if any(payload.message_id == msg.id for msg in client.cached_messages):
+    if any(payload.message_id == msg.id for msg in bot.cached_messages):
         return
 
-    channel = await client.fetch_channel(payload.channel_id)
+    channel = await bot.fetch_channel(payload.channel_id)
     message = await channel.fetch_message(payload.message_id)
 
     sable.dao.update_message_reactions(payload.message_id, message.reactions)
     
     print(f"{payload.user_id} reacted with {payload.emoji} on {payload.message_id}")
     
-@client.event
+@bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
-    if any(payload.message_id == msg.id for msg in client.cached_messages):
+    if any(payload.message_id == msg.id for msg in bot.cached_messages):
         return
 
-    channel = await client.fetch_channel(payload.channel_id)
+    channel = await bot.fetch_channel(payload.channel_id)
     message = await channel.fetch_message(payload.message_id)
 
     sable.dao.update_message_reactions(payload.message_id, message.reactions)
     
     print(f"{payload.user_id} retracted {payload.emoji} on {payload.message_id}")
 
+@bot.tree.command(name="brief", description="Get current status")
+async def brief_command(interaction: discord.Interaction):
+    """"""
+    pass
+
+@bot.tree.command(name="memout", description="Export DB contents as a .sqlite file")
+async def export_memory_command(interaction: discord.Interaction):
+    if not permission_check(interaction.user):
+        await interaction.response.send_message(
+            f"I don't want to share that with you.", ephemeral=True
+        )
+        return
+    
+    buffer = await sable.dao.dump()
+    
+    if buffer:
+        now = datetime.now().strftime("%Y%m%dT%H%M%S")
+        filename = f"Sable_Memories_{now}.sqlite"
+        file = discord.File(buffer, filename)
+        
+        await interaction.response.send_message(
+            "Done! The attachment contains all I know.",
+            file=file,
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            "I am sorry to disappoint you. But, I seem to be having issues recalling my memories.",
+            ephemeral=True
+        )
+
+def shutdown_cleanup():
+    """Sync shutdown logic for both paths."""
+    sable.close()
+
+def shutdown_signal(sig=None, frame=None):
+    """Signal handler."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(bot.close())
+    except RuntimeError:
+        asyncio.run(bot.close())
+    shutdown_cleanup()
+    exit(0)
+
+@bot.tree.command(name="shutdown")
+async def shutdown_command(interaction: discord.Interaction):
+    if not permission_check(interaction.user):
+        await interaction.response.send_message(
+            f"I'm afraid I won't do that.", ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        "Message received. Beginning shutdown now.", ephemeral=True
+    )
+    await bot.close()
+    shutdown_cleanup()
+
 if __name__ == "__main__":
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    
     if not TOKEN:
         raise RuntimeError("DISCORD_BOT_TOKEN not found in .env")
+    
+    # Register signal handlers for Ctrl+C and termination
+    for s in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(s, shutdown_signal)
+    atexit.register(safe_shutdown)
+    
     asyncio.run(sable.async_init())
-    client.run(TOKEN)
+    
+    bot.run(TOKEN)
