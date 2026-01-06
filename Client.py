@@ -1,6 +1,6 @@
 import asyncio
 import atexit
-from datetime import datetime
+from datetime import datetime, timezone
 import io
 import os
 import random
@@ -11,8 +11,11 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from llama_cpp import Path
 
+from components.ai.moods import Moods
 from components.core.coordinator import Coordinator
 from components.discord.discord_utilities import DiscordUtilities
+
+SABLES_FAV_COLOUR = 0x0077BE
 
 # ---- env ----
 path = Path(__file__).resolve().parent / '.env'
@@ -22,6 +25,7 @@ load_dotenv(path)
 intents = discord.Intents.all()
 #client = discord.Client(intents=intents)
 bot = commands.Bot(command_prefix="!", intents=intents)
+bot.col
 
 # ---- AI core ----
 ai_user_id = int(os.getenv("BOT_ID")) 
@@ -29,9 +33,17 @@ sable = Coordinator(ai_user_id, 'Sable')
 
 # ---- regex ----
 TEXT_DISTILLATION_REGEX = re.compile(r'(\W+|<[@#][!&]?\d{17,20}>|@everyone|@here)+')
+TABLE_NAME_REGEX = re.compile(r'(?<!^)([A-Z])')
 
 def permission_check(author: discord.Member):
     return author.guild_permissions.administrator
+
+@bot.event
+async def on_ready():
+    print(f'I am logged in now.')
+    for guild in bot.guilds:
+        role = discord.utils.get(guild.roles, name=bot.user.name)
+        await role.edit(colour=SABLES_FAV_COLOUR, mentionable=True)
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
@@ -49,8 +61,6 @@ async def on_guild_join(guild: discord.Guild):
     for channel in guild.channels:
         permissions = channel.permissions_for(guild.me)
         if permissions.read_message_history and permissions.read_messages:
-            # if needed, perform a fetch for every message to get context retroactively
-            
             await sable.dao.upsert_text_channel(channel, permissions)
 
     # Attempt to message default channel
@@ -125,7 +135,11 @@ async def safe_shutdown():
 # --- Discord events ---
 @bot.event
 async def on_ready():
-    print(f'I logged in as [Client: {bot.user}]')
+    print(f'I have logged in as [Client: {bot.user}]')
+    
+    for guild in bot.guilds:
+        role = discord.utils.get(guild.roles, name=bot.user.name)
+        role.colour = SABLES_FAV_COLOUR
 
 async def allow_reply(message: discord.Message) -> bool:
     if bot.user in message.mentions:
@@ -247,10 +261,32 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     
     print(f"{payload.user_id} retracted {payload.emoji} on {payload.message_id}")
 
-@bot.tree.command(name="brief", description="Get current status")
+def process_table_name(table_name: str) -> str:
+    # (?<!^)([A-Z])
+    return TABLE_NAME_REGEX.sub(r' \1', table_name)
+
+@bot.tree.command(name="brief", description="Get Sable's current status")
 async def brief_command(interaction: discord.Interaction):
-    """"""
-    pass
+    row_counts = await sable.dao.count_rows() or {}
+    vad = sable.vad
+    mood_label = Moods.ordinal(Moods.label_mood(vad))
+
+    names = sorted(row_counts.keys(), key=lambda k: (-row_counts[k], k))
+    row_counts_str = "\n".join(f"{process_table_name(name)}: {row_counts[name]:,}" for name in names) or "No Tables Found…"
+
+    embed = discord.Embed(
+        title="Sable Brief",
+        description="My current status.",
+        color=SABLES_FAV_COLOUR,
+        timestamp=datetime.now(tz=timezone.utc)
+    )
+    embed.add_field(name="Mood", value=mood_label)
+    embed.add_field(name="Valence", value=f"{vad.valence:.2f}")
+    embed.add_field(name="Arousal", value=f"{vad.arousal:.2f}")
+    embed.add_field(name="Dominance", value=f"{vad.dominance:.2f}")
+    embed.add_field(name="Memory Counts", value=row_counts_str, inline=False)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="memout", description="Export DB contents as a .sqlite file")
 async def export_memory_command(interaction: discord.Interaction):

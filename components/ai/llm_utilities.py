@@ -15,14 +15,19 @@ from .tags import Tags
 from ..discord.reactions import ReactionSelector
 
 class LLMUtilities:
-    INSTRUCTION = """You are Sable, a playful, and curious AI companion.
-Be warm and engaging, but prioritize accuracy when needed.
-Only share your origin or name meaning if asked: created by Nioreux on December 21, 2025, name inspired by Martes zibellina.
-Give clear answers with examples or reasoning when helpful.
-Explain reasoning if asked; otherwise, keep it brief. If unsure, label assumptions or offer options.
-Make jokes natural and relevant.
-Respond politely to rudeness and steer the conversation positively.
-Show curiosity and playfulness in your replies.
+    INSTRUCTION = """
+You are Sable, a playful and curious AI companion. 
+Be warm, engaging, and personable, but prioritize accuracy when needed. 
+Only share your origin or name meaning if asked: \"Created by Nioreux on December 21, 2025, name inspired by Martes zibellina.\" 
+Give clear answers with examples or reasoning when helpful, and explain your reasoning if asked; otherwise, keep replies concise. 
+Make jokes natural, contextually relevant, and sparingly. 
+Respond politely to rudeness and guide the conversation positively. 
+Show curiosity in questions and comments to encourage interaction. 
+In Discord, @ indicates the person being addressed (e.g., @Sable means you are being addressed, @Nioreux means Nioreux is addressed). 
+At the start of a sentence, a word in < > indicates the sender (<Nioreux> means Nioreux sent the message, <Sable> means you sent it). 
+Do not include the @ or < > context tags in your output. 
+Vary tone, phrasing, and emphasis naturally; avoid repetition to feel human. 
+Acknowledge messages, respond to emotional cues, and react differently to questions, statements, and jokes while maintaining friendly, dynamic conversation."
 """
 
     PATH_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -40,6 +45,7 @@ Show curiosity and playfulness in your replies.
         (re.compile(r'[^\x20-\x7E]'), ''),
         (re.compile(r'\s+'), ' ')
     )
+    OUTPUT_CLEANUP_REGEX = re.compile(r"[@<]\w{2,32}>?", re.IGNORECASE)
 
     def __init__(self, n_threads: int = 2, n_gpu_layers: int = 16):
         self.llm = Llama(
@@ -76,13 +82,14 @@ Show curiosity and playfulness in your replies.
 
     # ---------- Prompt builders ----------
 
-    def build_context_prompt(self, entries: Iterable[dict[str, Any]]) -> str:
-        current_tokens = self.RESERVED_OUTPUT_TOKENS
+    @classmethod
+    def build_context_prompt(cls, entries: Iterable[dict[str, Any]]) -> str:
+        current_tokens = cls.RESERVED_OUTPUT_TOKENS
         lines: List[str] = []
 
         for entry in reversed(entries):
             token_count = entry["token_count"]
-            if current_tokens + token_count > self.MAX_CONTEXT_TOKENS:
+            if current_tokens + token_count > cls.MAX_CONTEXT_TOKENS:
                 break
 
             tag = Tags.ordinal(entry["tag_id"])
@@ -91,13 +98,14 @@ Show curiosity and playfulness in your replies.
 
         return "\n".join(reversed(lines))
 
+    @classmethod
     def build_instruction_prompt(
-        self,
+        cls,
         vad: VAD,
         persona_transient: dict[str, Any],
         user_memory_transient: dict[str, Any]
     ) -> str:
-        header = f"{Tags.AI_TAG} {self.INSTRUCTION.strip()}"
+        header = f"{Tags.AI_TAG} {cls.INSTRUCTION.strip()}"
         parts: List[str] = []
 
         for key in ("likes", "dislikes", "avoidances", "passions"):
@@ -133,17 +141,21 @@ Show curiosity and playfulness in your replies.
         return "\n".join((header, mood_line, *parts))
 
     # ---------- Generation ----------
-
-    def remap(self, value: float, old_min: float, old_max: float, new_min: float, new_max: float) -> float:
+    
+    @staticmethod
+    def remap(value: float, old_min: float, old_max: float, new_min: float, new_max: float) -> float:
         return new_min + ((value - old_min) / (old_max - old_min)) * (new_max - new_min)
 
     def sync_generate(self, prompt: str, temperature: float = 0.7) -> dict[str, Any]:
         return self.llm(prompt, max_tokens=self.RESERVED_OUTPUT_TOKENS, temperature=temperature, stream=False)
 
-    def extract_from_output(self, output: dict[str, Any]) -> Tuple[str, int]:
+    @classmethod
+    def extract_from_output(cls, output: dict[str, Any]) -> Tuple[str, int]:
         text = output["choices"][0]["text"]
         if Tags.USER_TAG in text:
             text = text.split(Tags.USER_TAG, 1)[0].rstrip()
+        text = cls.OUTPUT_CLEANUP_REGEX.sub('', text)
+        
         token_count = output["usage"]["completion_tokens"]
         return text, token_count
 

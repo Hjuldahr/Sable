@@ -6,7 +6,7 @@ import io
 import json
 from pathlib import Path
 import sqlite3
-from typing import Any, Iterable
+from typing import Any, Generator, Iterable
 import aiofiles
 import aiosqlite
 import discord
@@ -587,4 +587,35 @@ class SQLiteDAO:
                 
         except aiosqlite.Error as err:
             print(f"Dump failed: {err}")
+            return None
+        
+    @classmethod
+    async def dump(cls) -> io.BytesIO | None:
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                buffer = io.BytesIO()
+                async for line in db.iterdump():
+                    buffer.write(f"{line}\n".encode('utf-8'))
+                buffer.seek(0)
+                return buffer
+                
+        except aiosqlite.Error as err:
+            print(f"Dump failed: {err}")
+            return None   
+            
+    @classmethod
+    async def count_rows(cls) -> dict[str,int] | None:
+        table_counts = {}
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name") as cursor:
+                    async for row in cursor:
+                        table_name = row[0]
+                        async with db.execute(f"SELECT count(*) FROM {table_name}") as cursor2:
+                            result = await cursor2.fetchone()
+                            table_counts[table_name] = result[0]
+            return table_counts
+
+        except aiosqlite.Error as err:
+            print(f"Row count failed: {err}")
             return None

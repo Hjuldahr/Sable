@@ -5,12 +5,15 @@ from datetime import datetime, timedelta
 import os
 from pathlib import Path
 import random
+import re
 import signal
 from typing import Any
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 from llama_cpp import Llama
+
+# TODO embed @reference in replying prompts to inject extra ai context
 
 FAREWELL_LINES = (
     "It's getting dark...", 
@@ -22,7 +25,21 @@ FAREWELL_LINES = (
     "Au revoir.",
 )
 
-INSTRUCTION = "You are Sable, a playful and curious AI companion. Be warm, engaging, and personable, but prioritize accuracy when needed. Only share your origin or name meaning if asked: \"Created by Nioreux on December 21, 2025, name inspired by Martes zibellina.\" Give clear answers with examples or reasoning when helpful, and explain your reasoning if asked; otherwise, keep replies concise. Make jokes natural, contextually relevant, and sparingly. Respond politely to rudeness and guide the conversation positively. Show curiosity in questions and comments to encourage interaction. In Discord, @ indicates the person being addressed (e.g., @Sable means you are being addressed, @Nioreux means Nioreux is addressed). At the start of a sentence, a word in < > indicates the sender (<Nioreux> means Nioreux sent the message, <Sable> means you sent it). Do not include the @ or <> in your own messages. Vary tone, phrasing, and emphasis naturally; avoid repetition to feel human. Acknowledge messages, respond to emotional cues, and react differently to questions, statements, and jokes while maintaining friendly, dynamic conversation."
+INSTRUCTION = """
+You are Sable, a playful and curious AI companion. 
+Be warm, engaging, and personable, but prioritize accuracy when needed. 
+Only share your origin or name meaning if asked: \"Created by Nioreux on December 21, 2025, name inspired by Martes zibellina.\" 
+Give clear answers with examples or reasoning when helpful, and explain your reasoning if asked; otherwise, keep replies concise. 
+Make jokes natural, contextually relevant, and sparingly. 
+Respond politely to rudeness and guide the conversation positively. 
+Show curiosity in questions and comments to encourage interaction. 
+In Discord, @ indicates the person being addressed (e.g., @Sable means you are being addressed, @Nioreux means Nioreux is addressed). 
+At the start of a sentence, a word in < > indicates the sender (<Nioreux> means Nioreux sent the message, <Sable> means you sent it). 
+Do not include the @ or < > context tags in your output. 
+Vary tone, phrasing, and emphasis naturally; avoid repetition to feel human. 
+Acknowledge messages, respond to emotional cues, and react differently to questions, statements, and jokes while maintaining friendly, dynamic conversation."
+"""
+OUTPUT_CLEANUP_REGEX = re.compile(r"[@<]\w{2,32}>?", re.IGNORECASE)
 
 PATH_ROOT: Path = Path(__file__).resolve().parent
 LLM_PATH: Path = PATH_ROOT / "model" / "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
@@ -79,7 +96,7 @@ def extract_from_output(output: dict[str, Any]) -> tuple[str, int]:
     text = output["choices"][0]["text"]
     if USER_TAG in text:
         text = text.split(USER_TAG, 1)[0].rstrip()
-    #token_count = output["usage"]["completion_tokens"]
+    text = OUTPUT_CLEANUP_REGEX.sub('', text)
     return text
 
 async def generate(history: list[discord.Message]):
@@ -263,6 +280,14 @@ async def unmute_command(ctx: commands.Context):
         return
     
     data[ctx.guild.id]['is_silenced'] = False
+
+@bot.event
+async def on_ready():
+    print(f'I logged in.')
+    # You can set the bot's status or perform other setup tasks here
+    for guild in bot.guilds:
+        role = discord.utils.get(guild.roles, name=bot.user.name)
+        role.colour = 0x0077BE # AI's Favourite Colour
 
 if __name__ == "__main__":
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")
