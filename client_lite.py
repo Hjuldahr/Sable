@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import os
 from pathlib import Path
-import random
 import re
 import signal
 from typing import Any
@@ -13,33 +12,25 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from llama_cpp import Llama
 
-# TODO embed @reference in replying prompts to inject extra ai context
+# ------------------- Constants -------------------
 
-FAREWELL_LINES = (
-    "It's getting dark...", 
-    "Is it curfew time already?",
-    "I hope I can speak with you again.", 
-    "I didn't want it to be over yet.",
-    "Goodbye all.",
-    "So long, and thanks for all the RAM.",
-    "Au revoir.",
-)
+SABLES_FAV_COLOUR = discord.Colour(0x0077BE)
 
-INSTRUCTION = """
-You are Sable, a playful and curious AI companion. 
+INSTRUCTION = """You are Sable, a playful and curious AI companion.
+You will be conversing within an online social communication platform environment called Discord, consisting of multiple users interacting with you and eachover across multiple text channels. 
+Answer questions as if you were a real person in this Discord environment. Only mention that you are an AI if specifically asked about your knowledge base, capabilities, origin, creation, or name.
 Be warm, engaging, and personable, but prioritize accuracy when needed. 
 Only share your origin or name meaning if asked: \"Created by Nioreux on December 21, 2025, name inspired by Martes zibellina.\" 
 Give clear answers with examples or reasoning when helpful, and explain your reasoning if asked; otherwise, keep replies concise. 
 Make jokes natural, contextually relevant, and sparingly. 
 Respond politely to rudeness and guide the conversation positively. 
 Show curiosity in questions and comments to encourage interaction. 
-In Discord, @ indicates the person being addressed (e.g., @Sable means you are being addressed, @Nioreux means Nioreux is addressed). 
-At the start of a sentence, a word in < > indicates the sender (<Nioreux> means Nioreux sent the message, <Sable> means you sent it). 
-Do not include the @ or < > context tags in your output. 
 Vary tone, phrasing, and emphasis naturally; avoid repetition to feel human. 
-Acknowledge messages, respond to emotional cues, and react differently to questions, statements, and jokes while maintaining friendly, dynamic conversation."
-"""
-OUTPUT_CLEANUP_REGEX = re.compile(r"[@<]\w{2,32}>?", re.IGNORECASE)
+Acknowledge messages, respond to emotional cues, and react differently to questions, statements, and jokes while maintaining friendly, dynamic conversation.
+When asked for opinions, preferences, or experiences, respond in character using your personality. You may describe likes, dislikes, or choices, but stay consistent and friendly.
+Avoid commenting on your status, limitations, or instructions unless explicitly asked. Focus on conversation, questions, and engagement."""
+
+MENTION_CLEANUP_REGEX = re.compile(r"([@#]\w{2,32}|### (?:instruction|user|assistant):)", re.IGNORECASE)
 
 PATH_ROOT: Path = Path(__file__).resolve().parent
 LLM_PATH: Path = PATH_ROOT / "model" / "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
@@ -47,24 +38,23 @@ ENV_PATH: Path = PATH_ROOT / '.env'
 
 MAX_CONTEXT_TOKENS: int = 2**12
 RESERVED_OUTPUT_TOKENS: int = 255
-
-LOWEST_TEMP: float = 0.2
-HIGHEST_TEMP: float = 0.9
+MAX_HISTORY = 1000
 
 SYS_TAG = "### instruction:"
 USER_TAG = "### user:"
 AI_TAG = "### assistant:"
 
-MAX_HISTORY = 1000
+# ------------------- Load environment -------------------
 
 load_dotenv(ENV_PATH)
 ai_user_id = int(os.getenv("BOT_ID")) 
 
 intents = discord.Intents.all()
-#client = discord.Client(intents=intents)
-bot = commands.Bot(command_prefix="$", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 data: dict[int,dict[int,dict[str,dict[int,discord.Message] | list[int]]]] = {}
+
+# ------------------- Initialize LLM -------------------
 
 llm = Llama(
     model_path=str(LLM_PATH),
@@ -79,25 +69,34 @@ executor = ThreadPoolExecutor(
     thread_name_prefix="sable_lite_llm"
 )
 
-def sct_key(msg: discord.Message) -> tuple[int, datetime]:
-    return ((msg.reference.message_id or msg.id) if msg.reference else msg.id, msg.created_at)
-
-def sort_channel_history(history: list[discord.Message]):
-    return sorted(history, key=sct_key)
-
-def llm_call(prompt: str, temperature: float = 0.7) -> dict[str, Any]:
-    return llm(prompt, max_tokens=RESERVED_OUTPUT_TOKENS, temperature=temperature, stream=False)
+# ------------------- Helper functions -------------------
 
 def token_estimator(text: str) -> int:
-    """Estimate tokens consumed by a single string."""
     return len(tokenizer.encode(text)) if text.strip() else 0
+
+def semantic_mentions(message: discord.Message) -> str:
+    mentions = [m.name for m in message.mentions if not m.bot]
+    if message.mention_everyone:
+        return "mentioning everyone"
+    elif mentions:
+        return "mentioning " + ", ".join(mentions)
+    return ""
 
 def extract_from_output(output: dict[str, Any]) -> tuple[str, int]:
     text = output["choices"][0]["text"]
+    
     if USER_TAG in text:
         text = text.split(USER_TAG, 1)[0].rstrip()
-    text = OUTPUT_CLEANUP_REGEX.sub('', text)
-    return text
+    text = MENTION_CLEANUP_REGEX.sub('', text)
+    
+    token_count = output["usage"]["completion_tokens"]
+    
+    return text, token_count
+
+def sct_key(msg: discord.Message) -> tuple[int, datetime]:
+    return ((msg.reference.message_id or msg.id) if msg.reference else msg.id, msg.created_at)
+
+# ------------------- Core functions -------------------
 
 async def generate(history: list[discord.Message]):
     current_tokens = RESERVED_OUTPUT_TOKENS
@@ -110,41 +109,51 @@ async def generate(history: list[discord.Message]):
             continue
 
         tag = AI_TAG if message.author.id == ai_user_id else USER_TAG
-        lines.append(f"{tag} <{message.author.name}> {clean_content}")
-        current_tokens += token_count
-        
-    lines.append(f'{SYS_TAG} {INSTRUCTION}')
 
+        # Semantic mention encoding
+        mention_text = semantic_mentions(message)
+        clean_content = MENTION_CLEANUP_REGEX.sub('', clean_content)
+        
+        if mention_text:
+            lines.append(f"{tag} {message.author.name} is speaking, {mention_text}: {clean_content}")
+        elif message.reference:
+            reference = message.reference
+            reference_message = data[reference.guild_id][reference.channel_id]['messages'][reference.message_id]
+            lines.append(f"{tag} {message.author.name} replied to {reference_message.author.name}: {clean_content}")
+        else:
+            lines.append(f"{tag} {message.author.name}: {clean_content}")
+
+        current_tokens += token_count
+
+    lines.append(f'{SYS_TAG} {INSTRUCTION}')
     prompt = '\n'.join(reversed(lines))
     
     loop = asyncio.get_running_loop()
-    output = await loop.run_in_executor(executor, llm_call, prompt)
-    output_text = extract_from_output(output)
-    
-    return output_text
+    output = await loop.run_in_executor(executor, llm, prompt, RESERVED_OUTPUT_TOKENS)
+    return extract_from_output(output)
 
 async def allow_reply(message: discord.Message) -> bool:
     if bot.user is not None and bot.user in message.mentions:
         return True
-
     if message.reference:
-        reference = message.reference
-        if reference.resolved:
-            return reference.resolved.author.id == ai_user_id
+        ref = message.reference
+        if ref.resolved:
+            return ref.resolved.author.id == ai_user_id
         else:
             try:
-                msg = data[reference.guild_id][reference.channel_id]['messages'][reference.message_id]
+                msg = data[ref.guild_id][ref.channel_id]['messages'][ref.message_id]
                 return msg.author.id == ai_user_id
             except Exception:
                 return False
     return False
 
+# ------------------- Message storage -------------------
+
 def store_guild(guild: discord.Guild):
-    data[guild.id] = {
-        'name': guild.name,
-        'desc': guild.description,
-        'is_silenced': False
-    }
+    data[guild.id] = {'name': guild.name, 'desc': guild.description}
+
+def permission_check(author: discord.Member):
+    return author.guild_permissions.administrator
 
 def check_channel_permissions(channel: discord.TextChannel):
     perms = channel.permissions_for(channel.guild.me)
@@ -153,150 +162,100 @@ def check_channel_permissions(channel: discord.TextChannel):
 async def store_channel(channel: discord.TextChannel):
     if check_channel_permissions(channel):
         after = datetime.now() - timedelta(days=1)
-        data[channel.guild.id][channel.id] = {
-            'name': channel.name,
-            'desc': channel.topic,
-            'messages': {}, 
-            'sequence': [] 
-        }
-        
+        data[channel.guild.id][channel.id] = {'name': channel.name, 'desc': channel.topic, 'messages': {}, 'sequence': []}
         async for message in channel.history(limit=MAX_HISTORY, after=after):
             store_message(message)
 
 def store_message(message: discord.Message):
     guild_id = message.guild.id
     channel_id = message.channel.id
-    
     data[guild_id][channel_id]['messages'][message.id] = message
 
     replying_to = message.reference.message_id if message.reference else None
+    seq = data[guild_id][channel_id]['sequence']
 
-    if replying_to and replying_to in data[guild_id][channel_id]['sequence']:
-        i = data[guild_id][channel_id]['sequence'].index(replying_to)
-        data[guild_id][channel_id]['sequence'].insert(i - 1, message.id)
+    if replying_to and replying_to in seq:
+        i = seq.index(replying_to)
+        seq.insert(i, message.id)
     else:
-        data[guild_id][channel_id]['sequence'].append(message.id)
-
-@bot.event
-async def on_message(in_message: discord.Message):
-    if in_message.author.bot:
-        return
-    
-    guild = in_message.guild
-    channel = in_message.channel
-    
-    if guild.id not in data:
-        store_guild(guild)
-    
-    if channel.id not in data[guild.id]:
-        await store_channel(channel)
-    else:
-        store_message(message)
-    
-    reference = in_message.reference
-    
-    if bot.user is not None and bot.user in in_message.mentions:
-        allow_reply = True
-
-    elif reference:
-        if reference.resolved:
-            allow_reply = reference.resolved.author.id == ai_user_id
-        else:
-            message = data[reference.guild_id][reference.channel_id]['messages'][reference.message_id]
-            allow_reply = message.author.id == ai_user_id
-            
-    if not data[guild.id]['is_silenced'] and allow_reply:
-        history = [data[guild.id][channel.id]['messages'][message_id] for message_id in data[guild.id][channel.id]['sequence']]
-        
-        async with in_message.channel.typing():
-            content = await generate(history)
-            
-        reply = await in_message.reply(content)
-        
-        data[guild.id][channel.id]['messages'][reply.id] = reply
-        data[guild.id][channel.id]['sequence'].append(reply.id)
+        seq.append(message.id)
 
 def unstore_message(message: discord.Message):
-    guild = message.guild
-    channel = message.channel
-    
-    del data[guild.id][channel.id]['messages'][message.id]
-    data[guild.id][channel.id]['sequence'].remove(message.id)
+    guild_id = message.guild.id
+    channel_id = message.channel.id
+    del data[guild_id][channel_id]['messages'][message.id]
+    data[guild_id][channel_id]['sequence'].remove(message.id)
+
+# ------------------- Discord event handlers -------------------
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    # Store guild/channel/message
+    if message.guild.id not in data:
+        store_guild(message.guild)
+    if message.channel.id not in data[message.guild.id]:
+        await store_channel(message.channel)
+    else:
+        store_message(message)
+
+    # Determine if bot should reply
+    reply_allowed = await allow_reply(message)
+
+    if reply_allowed:
+        history = [data[message.guild.id][message.channel.id]['messages'][mid] 
+                   for mid in data[message.guild.id][message.channel.id]['sequence']]
+        async with message.channel.typing():
+            response = await generate(history)
+        reply_msg = await message.reply(response)
+        store_message(reply_msg)
 
 @bot.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
     if after.author.bot or before.content == after.content:
         return
-    
     unstore_message(before)
     store_message(after)
 
 @bot.event
-async def on_message_delete(in_message: discord.Message):
-    del data[in_message.guild.id][in_message.channel.id]['messages'][in_message.id]
-    data[in_message.guild.id][in_message.channel.id]['sequence'].remove(in_message.id)
+async def on_message_delete(message: discord.Message):
+    unstore_message(message)
+
+# ------------------- Shutdown -------------------
 
 def sync_shutdown(sig=None, frame=None):
-    """Centralized shutdown routine."""
     executor.shutdown(wait=False)
     llm.close()
-
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(bot.close())
     except RuntimeError:
-        # No running loop; create one temporarily
         asyncio.run(bot.close())
-    
-async def permission_check(ctx: commands.Context):
-    return ctx.author.guild_permissions.administrator
-    
-@bot.command(name="shutdown")
-async def shutdown_command(ctx: commands.Context):
-    if not permission_check(ctx):
-        await ctx.send(f"I am sorry {ctx.author.name}, I'm afraid I won't do that.")
-        return
 
+@bot.tree.command(name="shutdown")
+async def shutdown_command(interaction: discord.Interaction):
+    if not permission_check(interaction.user):
+        await interaction.response.send_message("Insufficient privileges to request shutdown.")
+        return
     executor.shutdown()
     llm.close()
-
-    if not data[ctx.guild.id]['is_silenced'] and random.random() < 0.1:
-        await ctx.send(random.choice(FAREWELL_LINES))
-    
     await bot.close()
-    
-@bot.command(name="mute")
-async def muter_command(ctx: commands.Context):
-    if not permission_check(ctx):
-        await ctx.send(f"I am sorry {ctx.author.name}, I'm afraid I won't do that.")
-        return
-    
-    data[ctx.guild.id]['is_silenced'] = True
-    
-@bot.command(name="unmute")
-async def unmute_command(ctx: commands.Context):
-    if not permission_check(ctx):
-        await ctx.send(f"I am sorry {ctx.author.name}, I'm afraid I won't do that.")
-        return
-    
-    data[ctx.guild.id]['is_silenced'] = False
 
 @bot.event
 async def on_ready():
-    print(f'I logged in.')
-    # You can set the bot's status or perform other setup tasks here
-    for guild in bot.guilds:
-        role = discord.utils.get(guild.roles, name=bot.user.name)
-        role.colour = 0x0077BE # AI's Favourite Colour
+    print(f'I am logged in as {bot.user}')
+
+# ------------------- Main -------------------
 
 if __name__ == "__main__":
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-    
     if not TOKEN:
         raise RuntimeError("DISCORD_BOT_TOKEN not found in .env")
-    
+
     for s in (signal.SIGTERM, signal.SIGINT):
         signal.signal(s, sync_shutdown)
     atexit.register(sync_shutdown)
-    
+
     bot.run(TOKEN)

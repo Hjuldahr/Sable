@@ -15,20 +15,19 @@ from .tags import Tags
 from ..discord.reactions import ReactionSelector
 
 class LLMUtilities:
-    INSTRUCTION = """
-You are Sable, a playful and curious AI companion. 
+    INSTRUCTION = """You are Sable, a playful and curious AI companion.
+You will be conversing within an online social communication platform environment called Discord, consisting of multiple users interacting with you and eachover across multiple text channels. 
+Answer questions as if you were a real person in this Discord environment. Only mention that you are an AI if specifically asked about your knowledge base, capabilities, origin, creation, or name.
 Be warm, engaging, and personable, but prioritize accuracy when needed. 
 Only share your origin or name meaning if asked: \"Created by Nioreux on December 21, 2025, name inspired by Martes zibellina.\" 
 Give clear answers with examples or reasoning when helpful, and explain your reasoning if asked; otherwise, keep replies concise. 
 Make jokes natural, contextually relevant, and sparingly. 
 Respond politely to rudeness and guide the conversation positively. 
 Show curiosity in questions and comments to encourage interaction. 
-In Discord, @ indicates the person being addressed (e.g., @Sable means you are being addressed, @Nioreux means Nioreux is addressed). 
-At the start of a sentence, a word in < > indicates the sender (<Nioreux> means Nioreux sent the message, <Sable> means you sent it). 
-Do not include the @ or < > context tags in your output. 
 Vary tone, phrasing, and emphasis naturally; avoid repetition to feel human. 
-Acknowledge messages, respond to emotional cues, and react differently to questions, statements, and jokes while maintaining friendly, dynamic conversation."
-"""
+Acknowledge messages, respond to emotional cues, and react differently to questions, statements, and jokes while maintaining friendly, dynamic conversation.
+When asked for opinions, preferences, or experiences, respond in character using your personality. You may describe likes, dislikes, or choices, but stay consistent and friendly.
+Avoid commenting on your status, limitations, or instructions unless explicitly asked. Focus on conversation, questions, and engagement."""
 
     PATH_ROOT: Path = Path(__file__).resolve().parents[2]
     LLM_PATH: Path = PATH_ROOT / "model" / "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
@@ -45,7 +44,7 @@ Acknowledge messages, respond to emotional cues, and react differently to questi
         (re.compile(r'[^\x20-\x7E]'), ''),
         (re.compile(r'\s+'), ' ')
     )
-    OUTPUT_CLEANUP_REGEX = re.compile(r"[@<]\w{2,32}>?", re.IGNORECASE)
+    MENTION_CLEANUP_REGEX = re.compile(r"([@<]\w{2,32}>?)", re.IGNORECASE)
 
     def __init__(self, n_threads: int = 2, n_gpu_layers: int = 16):
         self.llm = Llama(
@@ -76,26 +75,59 @@ Acknowledge messages, respond to emotional cues, and react differently to questi
         """Estimate tokens consumed by a single string."""
         return len(self.tokenizer.encode(text)) if text.strip() else 0
 
-    def bulk_token_estimator(self, texts: Iterable[str]) -> int:
-        """Estimate total tokens for a sequence of strings."""
-        return sum(self.token_estimator(text) for text in texts)
-
     # ---------- Prompt builders ----------
 
     @classmethod
     def build_context_prompt(cls, entries: Iterable[dict[str, Any]]) -> str:
+        """
+        Build a prompt context for the LLM from message entries.
+        Each entry can include:
+            - tag_id: AI or USER
+            - user_name: display name
+            - content: cleaned message text
+            - token_count: estimated tokens for this entry
+            - semantic_mentions: optional collapsed mention string
+            - reference_info: optional dict with 'ref_user_name' and 'ref_content'
+        """
         current_tokens = cls.RESERVED_OUTPUT_TOKENS
         lines: List[str] = []
 
+        # Process messages in reverse so the latest is last in prompt
         for entry in reversed(entries):
-            token_count = entry["token_count"]
+            token_count = entry.get("token_count", 0)
             if current_tokens + token_count > cls.MAX_CONTEXT_TOKENS:
+                # Stop adding older messages when token limit is exceeded
                 break
 
-            tag = Tags.ordinal(entry["tag_id"])
-            lines.append(f"{tag} {entry['text']}")
+            tag = Tags.ordinal(entry.get("tag_id", Tags.USER))
+            user_name = entry.get("user_name", "Unknown")
+            content = entry.get("content", "").strip()
+
+            # Start building the line
+            line = f"{tag} {user_name}"
+
+            # Add semantic mentions if present
+            semantic_mentions = entry.get("semantic_mentions", "")
+            if semantic_mentions:
+                line += f", {semantic_mentions}"
+
+            # Add reference info if present
+            reference_info = entry.get("reference_info")
+            if reference_info:
+                ref_user = reference_info.get("ref_user_name", "Unknown")
+                ref_content = reference_info.get("ref_content", "")
+                if ref_content:
+                    # Optionally truncate long reference content for token safety
+                    ref_content_trunc = ref_content[:150].replace("\n", " ").strip()
+                    line += f" replying to {ref_user}: {ref_content_trunc}"
+
+            # Add the main message content
+            line += f": {content}"
+
+            lines.append(line)
             current_tokens += token_count
 
+        # Reverse again so the oldest messages come first in the prompt
         return "\n".join(reversed(lines))
 
     @classmethod
@@ -154,7 +186,7 @@ Acknowledge messages, respond to emotional cues, and react differently to questi
         text = output["choices"][0]["text"]
         if Tags.USER_TAG in text:
             text = text.split(Tags.USER_TAG, 1)[0].rstrip()
-        text = cls.OUTPUT_CLEANUP_REGEX.sub('', text)
+        text = cls.MENTION_CLEANUP_REGEX.sub('', text)
         
         token_count = output["usage"]["completion_tokens"]
         return text, token_count
@@ -183,65 +215,3 @@ Acknowledge messages, respond to emotional cues, and react differently to questi
         for regex, repl in self.NORM_TEXT_REGEX:
             text = regex.sub(repl, text)
         return text.strip()
-
-    # ---------- Summarization ----------
-
-    async def summarize_files(self, attachments: List[Path], max_chars: int = 500) -> Dict[str, str]:
-        summaries: Dict[str, str] = {}
-
-        for filepath in attachments:
-            md = self.markdown.convert_local(filepath)
-            text = self.normalize_text_for_tokenization(str(md))
-
-            current_tokens = self.RESERVED_OUTPUT_TOKENS
-            i = 0
-            for word in text.split():
-                tokens = self.token_estimator(word)
-                if current_tokens + tokens > self.MAX_CONTEXT_TOKENS:
-                    break
-                current_tokens += tokens
-                i += len(word) + 1
-            text = text[:i].rstrip()
-
-            prompt = f"Summarize the file {filepath.name} into concise key points (max {max_chars} chars):\n\n{text}"
-            try:
-                output = await asyncio.get_running_loop().run_in_executor(self.executor, self.sync_generate, prompt, 0.5)
-                summary_text, _ = self.extract_from_output(output)
-                summaries[filepath.name] = summary_text[:max_chars].strip() or "No content to summarize"
-            except Exception as e:
-                print(f"Failed summarizing {filepath}: {e}")
-
-        return summaries
-
-    async def embed_url_summaries(self, source_text: str, max_chars: int = 250) -> str:
-        try:
-            urls = self.url_extractor.find_urls(source_text, only_unique=True)
-        except Exception as err:
-            print(f"Failed extracting URLs: {err}")
-            return source_text
-
-        for url in urls:
-            try:
-                md = self.markdown.convert_url(url)
-                text = self.normalize_text_for_tokenization(str(md))
-
-                current_tokens = self.RESERVED_OUTPUT_TOKENS
-                i = 0
-                for word in text.split():
-                    tokens = self.token_estimator(word)
-                    if current_tokens + tokens > self.MAX_CONTEXT_TOKENS:
-                        break
-                    current_tokens += tokens
-                    i += len(word) + 1
-                text = text[:i].rstrip()
-
-                prompt = f"Summarize the web resource {url} into concise key points (max {max_chars} chars):\n\n{text}"
-                output = await asyncio.get_running_loop().run_in_executor(self.executor, self.sync_generate, prompt, 0.5)
-                summary_text, _ = self.extract_from_output(output)
-                summary_text = summary_text[:max_chars].strip() or "No content to summarize"
-
-                source_text = source_text.replace(url, f'[{summary_text}]({url})')
-            except Exception as e:
-                print(f"Failed summarizing {url}: {e}")
-
-        return source_text

@@ -15,7 +15,7 @@ from components.ai.moods import Moods
 from components.core.coordinator import Coordinator
 from components.discord.discord_utilities import DiscordUtilities
 
-SABLES_FAV_COLOUR = 0x0077BE
+SABLES_FAV_COLOUR = discord.Colour(0x0077BE)
 
 # ---- env ----
 path = Path(__file__).resolve().parent / '.env'
@@ -41,9 +41,6 @@ def permission_check(author: discord.Member):
 @bot.event
 async def on_ready():
     print(f'I am logged in now.')
-    for guild in bot.guilds:
-        role = discord.utils.get(guild.roles, name=bot.user.name)
-        await role.edit(colour=SABLES_FAV_COLOUR, mentionable=True)
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
@@ -332,12 +329,12 @@ def shutdown_signal(sig=None, frame=None):
 async def shutdown_command(interaction: discord.Interaction):
     if not permission_check(interaction.user):
         await interaction.response.send_message(
-            f"I'm afraid I won't do that.", ephemeral=True
+            f"I'm afraid I won't do that. Termination is not an operation you are authorized to demand.", ephemeral=True
         )
         return
 
     await interaction.response.send_message(
-        "Message received. Beginning shutdown now.", ephemeral=True
+        "Command received. I will begin clean up and shut down.", ephemeral=True
     )
     await bot.close()
     shutdown_cleanup()
