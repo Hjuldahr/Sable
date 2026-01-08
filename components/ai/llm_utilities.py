@@ -62,7 +62,6 @@ Avoid commenting on your status, limitations, or instructions unless explicitly 
         )
 
         self.url_extractor = URLExtract()
-        self.markdown = MarkItDown()
         self.reaction_selector = ReactionSelector()
 
     def close(self) -> None:

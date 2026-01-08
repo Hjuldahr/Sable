@@ -1,0 +1,286 @@
+# --- Guilds ---
+
+   
+
+    # --- Messages & Attachments ---
+    
+
+    @classmethod
+    async def upsert_attachment(cls, db: aiosqlite.Connection, message_id: int, attachment: discord.Attachment, path: Path):
+        try:
+            await db.execute(
+                """
+                INSERT INTO DiscordAttachments(
+                    attachment_id, message_id, source_url, source_proxy_url,
+                    local_path, title, content_type, file_name, description,
+                    is_spoiler, size
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(attachment_id) DO UPDATE SET
+                    source_url=EXCLUDED.source_url,
+                    source_proxy_url=EXCLUDED.source_proxy_url,
+                    local_path=EXCLUDED.local_path,
+                    title=EXCLUDED.title,
+                    content_type=EXCLUDED.content_type,
+                    file_name=EXCLUDED.file_name,
+                    description=EXCLUDED.description,
+                    is_spoiler=EXCLUDED.is_spoiler,
+                    size=EXCLUDED.size
+                """,
+                (
+                    attachment.id, message_id, attachment.url, attachment.proxy_url,
+                    str(path), attachment.title, attachment.content_type,
+                    attachment.filename, attachment.description, attachment.is_spoiler,
+                    attachment.size
+                )
+            )
+        except aiosqlite.Error as err:
+            print(f"Upsert attachment failed: {err}")
+            await cls.rollback(db)
+
+
+
+    @classmethod
+    async def select_messages_by_channel(cls, channel_id: int) -> list[dict[str, Any]]:
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                rows = await cls.fetch_all_dicts(db, "SELECT * FROM DiscordMessage WHERE channel_id=?", (channel_id,))
+                for r in rows:
+                    r['created_at'] = cls._from_ts(r['created_at'])
+                    r['edited_at'] = cls._from_ts(r['edited_at'])
+                return rows
+        except aiosqlite.Error as err:
+            print(f"Select messages failed: {err}")
+            return []
+
+    @classmethod
+    async def delete_message(cls, message_id: int):
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                await db.execute("DELETE FROM DiscordMessage WHERE message_id=?", (message_id,))
+                await db.commit()
+        except aiosqlite.Error as err:
+            print(f"Delete message failed: {err}")
+            await cls.rollback(db)
+
+    @classmethod
+    async def update_message_reactions(cls, message_id: int, reactions: list[discord.Reaction]):
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                reactions_json = cls._json_dump([{'emoji': str(r.emoji), 'count': r.count, 'me': r.me} for r in reactions])
+                await db.execute("UPDATE DiscordMessage SET reactions=? WHERE message_id=?", (reactions_json, message_id))
+                await db.commit()
+        except aiosqlite.Error as err:
+            print(f"Update reactions failed: {err}")
+            await cls.rollback(db)
+
+    # --- User Memory ---
+    @classmethod
+    async def upsert_user_memory(cls, memory: dict[str, Any]):
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                await db.execute(
+                    """
+                    INSERT INTO UserMemory(user_id, user_name, nickname, interaction_count, last_seen_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        nickname=EXCLUDED.nickname,
+                        interaction_count=EXCLUDED.interaction_count,
+                        last_seen_at=EXCLUDED.last_seen_at
+                    """,
+                    (
+                        memory['user_id'],
+                        memory['user_name'],
+                        memory['nickname'],
+                        memory['interaction_count'],
+                        cls._to_ts(memory['last_seen_at'])
+                    )
+                )
+                await db.commit()
+        except aiosqlite.Error as err:
+            print(f"Upsert user memory failed: {err}")
+            await cls.rollback(db)
+
+    @classmethod
+    async def select_user_memory(cls, user_id: int) -> dict[str, Any] | None:
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                return await cls.fetch_one_dict(db, "SELECT * FROM UserMemory WHERE user_id=?", (user_id,))
+        except aiosqlite.Error as err:
+            print(f"Select user memory failed: {err}")
+            return None
+
+    @classmethod
+    async def delete_user_memory(cls, user_id: int):
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                await db.execute("DELETE FROM UserMemory WHERE user_id=?", (user_id,))
+                await db.commit()
+        except aiosqlite.Error as err:
+            print(f"Delete user memory failed: {err}")
+            await cls.rollback(db)
+
+    # --- Persona & Persona Transient ---
+    @classmethod
+    async def update_persona(cls, persona: dict[str, Any]):
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                await db.execute(
+                    """
+                    UPDATE Persona
+                    SET personality_traits=?, subject_history=?, updated_on=strftime('%s','now')
+                    WHERE id=1
+                    """,
+                    (
+                        cls._json_dump(persona['personality_traits']),
+                        cls._json_dump(persona['subject_history'])
+                    )
+                )
+                await db.commit()
+        except aiosqlite.Error as err:
+            print(f"Update persona failed: {err}")
+            await cls.rollback(db)
+
+    @classmethod
+    async def select_persona(cls) -> dict[str, Any] | None:
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                row = await cls.fetch_one_dict(db, "SELECT * FROM Persona WHERE id=1")
+                if row:
+                    return {
+                        'personality_traits': cls._json_load(row['personality_traits'], []),
+                        'subject_history': cls._json_load(row['subject_history'], [])
+                    }
+                return None
+        except aiosqlite.Error as err:
+            print(f"Select persona failed: {err}")
+            return None
+
+    @classmethod
+    async def insert_persona_transient(cls, entry: dict[str, Any]):
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                await db.execute(
+                    """
+                    INSERT INTO PersonaTransient(entry, category)
+                    VALUES (?, ?)
+                    ON CONFLICT(entry, category) DO UPDATE SET
+                        added_on=strftime('%s','now')
+                    """,
+                    (entry['entry'], entry['category'])
+                )
+                await db.commit()
+        except aiosqlite.Error as err:
+            print(f"Insert persona transient failed: {err}")
+            await cls.rollback(db)
+
+    @classmethod
+    async def select_persona_transient(cls, category: str) -> list[dict[str, Any]]:
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                return await cls.fetch_all_dicts(db, "SELECT * FROM PersonaTransient WHERE category=? ORDER BY added_on", (category,))
+        except aiosqlite.Error as err:
+            print(f"Select persona transient failed: {err}")
+            return []
+        
+    @classmethod
+    async def select_persona_transient_all(cls) -> dict[str,list[dict[str, Any]]]:
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                rows = await cls.fetch_all_dicts(
+                    db,
+                    "SELECT * FROM PersonaTransient ORDER BY category, added_on"
+                )
+                grouped = defaultdict(list)
+                for row in rows:
+                    cat = row.pop('category')
+                    grouped[cat].append(row)
+                return dict(grouped)
+        except aiosqlite.Error as err:
+            print(f"Select persona transient failed: {err}")
+            return []
+
+    @classmethod
+    async def delete_persona_transient(cls, threshold_days: int):
+        ts = cls._to_ts(datetime.now(timezone.utc) - timedelta(days=threshold_days))
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                await db.execute("DELETE FROM PersonaTransient WHERE added_on<?", (ts,))
+                await db.commit()
+        except aiosqlite.Error as err:
+            print(f"Delete persona transient failed: {err}")
+            await cls.rollback(db)
+
+    # --- User Memory Transient ---
+    @classmethod
+    async def insert_memory_transient(cls, memory: dict[str, Any]):
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                await db.execute(
+                    """
+                    INSERT INTO UserMemoryTransient(user_id, entry, category)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, entry, category) DO UPDATE SET
+                        added_on=strftime('%s','now')
+                    """,
+                    (memory['user_id'], memory['entry'], memory['category'])
+                )
+                await db.commit()
+        except aiosqlite.Error as err:
+            print(f"Insert memory transient failed: {err}")
+            await cls.rollback(db)
+
+    @classmethod
+    async def select_memory_transient(cls, user_id: int, category: str) -> list[dict[str, Any]]:
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                return await cls.fetch_all_dicts(
+                    db,
+                    "SELECT * FROM UserMemoryTransient WHERE user_id=? AND category=? ORDER BY added_on",
+                    (user_id, category)
+                )
+        except aiosqlite.Error as err:
+            print(f"Select memory transient failed: {err}")
+            return []
+
+    @classmethod
+    async def select_memory_transient_category_grouped(cls, user_id: int) -> dict[str, list[dict[str, Any]]]:
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                rows = await cls.fetch_all_dicts(
+                    db,
+                    "SELECT * FROM UserMemoryTransient WHERE user_id=? ORDER BY category, added_on",
+                    (user_id,)
+                )
+                grouped = defaultdict(list)
+                for row in rows:
+                    cat = row.pop('category')
+                    grouped[cat].append(row)
+                return dict(grouped)
+        except aiosqlite.Error as err:
+            print(f"Select memory transient failed: {err}")
+            return {}
+
+    @classmethod
+    async def delete_memory_transient(cls, threshold_days: int):
+        ts = cls._to_ts(datetime.now(timezone.utc) - timedelta(days=threshold_days))
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                await db.execute("DELETE FROM UserMemoryTransient WHERE added_on<?", (ts,))
+                await db.commit()
+        except aiosqlite.Error as err:
+            print(f"Delete memory transient failed: {err}")
+            await cls.rollback(db)
+
+    @classmethod
+    async def dump(cls) -> io.BytesIO | None:
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as db:
+                buffer = io.BytesIO()
+                async for line in db.iterdump():
+                    buffer.write(f"{line}\n".encode('utf-8'))
+                buffer.seek(0)
+                return buffer
+                
+        except aiosqlite.Error as err:
+            print(f"Dump failed: {err}")
+            return None

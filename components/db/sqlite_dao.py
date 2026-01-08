@@ -10,11 +10,15 @@ from typing import Any, Generator, Iterable
 import aiofiles
 import aiosqlite
 import discord
+import markitdown
 
 class SQLiteDAO:
     PATH_ROOT = Path(__file__).resolve().parents[2]
     SETUP_SCRIPT_PATH = PATH_ROOT / 'components' / 'db' / 'setup.sqlite'
     DB_PATH = PATH_ROOT / 'data' / 'sqlite' / 'database.db'
+    
+    MID = markitdown.MarkItDown()
+    
     ran_setup = False
 
     @classmethod
@@ -88,295 +92,241 @@ class SQLiteDAO:
         async with db.execute(query, params) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
+        
+    @staticmethod
+    async def fetch_one_func(db: aiosqlite.Connection, func: Any, query: str, params: tuple | None = None) -> dict[str, Any] | None:
+        db.row_factory = sqlite3.Row
+        async with db.execute(query, params) as cursor:
+            row = await cursor.fetchone()
+            return func(dict(row)) if row else None
+        
+    @staticmethod
+    async def fetch_one_comp(db: aiosqlite.Connection, func: Any, query: str, params: tuple | None = None) -> dict[str, Any] | None:
+        db.row_factory = sqlite3.Row
+        async with db.execute(query, params) as cursor:
+            row = await cursor.fetchone()
+            return await func(db, dict(row)) if row else None
 
     @staticmethod
     async def fetch_all_dicts(db: aiosqlite.Connection, query: str, params: tuple | None = None) -> list[dict[str, Any]]:
         db.row_factory = sqlite3.Row
         async with db.execute(query, params) as cursor:
             return [dict(row) async for row in cursor]
-
-    # --- Guilds ---
-    @classmethod
-    async def upsert_guild(cls, guild: discord.Guild):
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                await db.execute(
-                    """
-                    INSERT INTO DiscordGuilds(
-                        guild_id, guild_name, guild_description,
-                        created_at, nsfw_level, verification_level, filesize_limit
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(guild_id) DO UPDATE SET
-                        guild_name = EXCLUDED.guild_name,
-                        guild_description = EXCLUDED.guild_description,
-                        nsfw_level = EXCLUDED.nsfw_level,
-                        verification_level = EXCLUDED.verification_level,
-                        filesize_limit = EXCLUDED.filesize_limit
-                    """,
-                    (
-                        guild.id,
-                        guild.name,
-                        guild.description or 'No Description Found',
-                        cls._to_ts(guild.created_at),
-                        guild.nsfw_level.name,
-                        guild.verification_level.name,
-                        guild.filesize_limit
-                    )
-                )
-                await db.commit()
-        except aiosqlite.Error as err:
-            print(f"Upsert guild failed: {err}")
-            await cls.rollback(db)
-
-    @classmethod
-    async def select_guild(cls, guild_id: int) -> dict[str, Any] | None:
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                row = await cls.fetch_one_dict(db, "SELECT * FROM DiscordGuilds WHERE guild_id=?", (guild_id,))
-                if row:
-                    row['created_at'] = cls._from_ts(row['created_at'])
-                return row
-        except aiosqlite.Error as err:
-            print(f"Select guild failed: {err}")
-            return None
-
-    @classmethod
-    async def select_all_guilds(cls) -> list[dict[str, Any]]:
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                rows = await cls.fetch_all_dicts(db, "SELECT * FROM DiscordGuilds")
-                for r in rows:
-                    r['created_at'] = cls._from_ts(r['created_at'])
-                return rows
-        except aiosqlite.Error as err:
-            print(f"Select all guilds failed: {err}")
-            return []
-
-    @classmethod
-    async def delete_guild(cls, guild_id: int):
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                await db.execute("DELETE FROM DiscordGuilds WHERE guild_id=?", (guild_id,))
-                await db.commit()
-        except aiosqlite.Error as err:
-            print(f"Delete guild failed: {err}")
-            await cls.rollback(db)
-
+        
+    @staticmethod
+    async def fetch_all_func(db: aiosqlite.Connection, func: Any, query: str, params: tuple | None = None) -> list[dict[str, Any]]:
+        db.row_factory = sqlite3.Row
+        async with db.execute(query, params) as cursor:
+            return [func(dict(row)) async for row in cursor]
+        
+    @staticmethod
+    async def fetch_all_comp(db: aiosqlite.Connection, func: Any, query: str, params: tuple | None = None) -> list[dict[str, Any]]:
+        db.row_factory = sqlite3.Row
+        async with db.execute(query, params) as cursor:
+            return [await func(db, dict(row)) async for row in cursor]
+            
+    # --- Guild ---
+    
+            
     # --- Text Channels ---
+    
+    
+            
+    # --- Messages ---
+    
+    
+        
+    # --- Discord Message Mentions (Helper) ---
+    
     @classmethod
-    async def upsert_text_channel(cls, channel: discord.TextChannel, permissions: discord.Permissions):
+    async def upsert_message_mentions(cls, db: aiosqlite.Connection, message: discord.Message):
         try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                permissions_json = cls._json_dump(dict(permissions))
-                await db.execute(
-                    """
-                    INSERT INTO DiscordTextChannels(
-                        channel_id, guild_id, channel_name, channel_topic,
-                        channel_type, is_nsfw, permissions_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(channel_id) DO UPDATE SET
-                        channel_name = EXCLUDED.channel_name,
-                        channel_topic = EXCLUDED.channel_topic,
-                        channel_type = EXCLUDED.channel_type,
-                        permissions_json = EXCLUDED.permissions_json,
-                        is_nsfw = EXCLUDED.is_nsfw
-                    """,
-                    (
-                        channel.id,
-                        channel.guild.id,
-                        channel.name,
-                        channel.topic or 'Topic not provided',
-                        channel.type.name,
-                        cls._from_bool(channel.is_nsfw),
-                        permissions_json,
-                        cls._to_ts(channel.created_at)
-                    )
-                )
-                await db.commit()
+            await db.executemany(
+                """
+                INSERT INTO DiscordMessageMentions(
+                    message_id, mention_text, mention_id
+                ) VALUES (?, ?, ?) 
+                ON CONFLICT(message_id, mention_id) DO NOTHING
+                """,
+                ((
+                    message.id,
+                    mention.name,
+                    mention.id
+                ) for mention in message.mentions)
+            )
         except aiosqlite.Error as err:
-            print(f"Upsert text channel failed: {err}")
+            print(f"Insert message mentions failed: {err}")
             await cls.rollback(db)
-
+    
     @classmethod
-    async def select_text_channel(cls, guild_id: int, channel_id: int) -> dict[str, Any] | None:
+    async def select_mentions_by_message_id(cls, db: aiosqlite.Connection, message_id: int) -> list[dict[str,Any]] | None:
         try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                row = await cls.fetch_one_dict(
-                    db,
-                    "SELECT * FROM DiscordTextChannels WHERE guild_id=? AND channel_id=?",
-                    (guild_id, channel_id)
-                )
-                if row:
-                    row['created_at'] = cls._from_ts(row['created_at'])
-                    row['is_nsfw'] = cls._to_bool(row['is_nsfw'])
-                    row['permissions'] = cls._json_load(row['permissions'])
-                return row
+            rows = await cls.fetch_all_dicts(
+                db, "SELECT * FROM DiscordMessageMentions WHERE message_id=?", (message_id,)
+            )
+            return rows
         except aiosqlite.Error as err:
-            print(f"Select text channel failed: {err}")
+            print(f"Select mentions failed: {err}")
             return None
-
+    
     @classmethod
-    async def select_all_text_channels(cls, guild_id: int) -> list[dict[str, Any]]:
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                rows = await cls.fetch_all_dicts(db, "SELECT * FROM DiscordTextChannels WHERE guild_id=?", (guild_id,))
-                for r in rows:
-                    r['created_at'] = cls._from_ts(r['created_at'])
-                    r['is_nsfw'] = cls._to_bool(r['is_nsfw'])
-                    r['permissions'] = cls._json_load(r['permissions'])
-                return rows
-        except aiosqlite.Error as err:
-            print(f"Select all text channels failed: {err}")
-            return []
-
-    @classmethod
-    async def delete_text_channel(cls, guild_id: int, channel_id: int):
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                await db.execute(
-                    "DELETE FROM DiscordTextChannels WHERE guild_id=? AND channel_id=?",
-                    (guild_id, channel_id)
-                )
-                await db.commit()
-        except aiosqlite.Error as err:
-            print(f"Delete text channel failed: {err}")
-            await cls.rollback(db)
-
-    # --- Messages & Attachments ---
-    @classmethod
-    async def upsert_message(cls, message: discord.Message, token_count: int):
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                reactions_json = cls._json_dump([{'emoji': str(r.emoji), 'count': r.count, 'me': r.me} for r in message.reactions])
-                reference_id = (message.reference.message_id or -1) if message.reference else -1
-
-                await db.execute(
-                    """
-                    INSERT INTO DiscordMessage(
-                        message_id, references_message_id, user_id, channel_id,
-                        text, token_count, reactions, created_at, edited_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(message_id) DO UPDATE SET
-                        references_message_id=EXCLUDED.references_message_id,
-                        text=EXCLUDED.text,
-                        token_count=EXCLUDED.token_count,
-                        reactions=EXCLUDED.reactions,
-                        edited_at=EXCLUDED.edited_at
-                    """,
-                    (
-                        message.id,
-                        reference_id,
-                        message.author.id,
-                        message.channel.id,
-                        message.clean_content,
-                        token_count,
-                        reactions_json,
-                        cls._to_ts(message.created_at, required=True),
-                        cls._to_ts(message.edited_at)
-                    )
-                )
-
-                for attachment in message.attachments:
-                    if not attachment.ephemeral:
-                        await cls.upsert_attachment(db, message.id, attachment, Path(attachment.filename))
-
-                await db.commit()
-        except aiosqlite.Error as err:
-            print(f"Upsert message failed: {err}")
-            await cls.rollback(db)
-
-    @classmethod
-    async def upsert_attachment(cls, db: aiosqlite.Connection, message_id: int, attachment: discord.Attachment, path: Path):
+    async def delete_mentions_by_message_id(cls, db: aiosqlite.Connection, message_id: int):
         try:
             await db.execute(
+                "DELETE FROM DiscordMessageMentions WHERE message_id=?", (message_id,)
+            )
+        except aiosqlite.Error as err:
+            print(f"Delete mentions failed: {err}")
+            cls.rollback(db)
+        
+    # --- Attachments (Helper) ---
+    def attachments_to_tuple(attachment_data: dict[str,discord.Message | markitdown.DocumentConverterResult | discord.Attachment | Path]) -> tuple[discord.Message | markitdown.DocumentConverterResult | discord.Attachment | Path]:
+        attachment: discord.Attachment = attachment_data['attachment']
+        message: discord.Message = attachment_data['message']
+        path: Path = attachment_data['path']
+        markdown: markitdown.DocumentConverterResult = attachment_data['markdown']
+
+        return (
+            attachment.id, message.id,
+            attachment.url, attachment.proxy_url, str(path.resolve()),
+            attachment.filename, attachment.content_type, attachment.size, attachment.is_spoiler,
+            markdown.title, str(markdown)
+        )
+    
+    @classmethod
+    async def upsert_attachments(
+        cls, db: aiosqlite.Connection, attachments_data: list[dict[str,discord.Message | markitdown.DocumentConverterResult | discord.Attachment | Path]]
+    ):
+        try:
+            await db.executemany(
                 """
                 INSERT INTO DiscordAttachments(
-                    attachment_id, message_id, source_url, source_proxy_url,
-                    local_path, title, content_type, file_name, description,
-                    is_spoiler, size
+                    attachment_id, message_id,
+                    source_url, source_proxy_url, local_path,
+                    file_name, content_type, size, is_spoiler,
+                    title, markdown
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(attachment_id) DO UPDATE SET
                     source_url=EXCLUDED.source_url,
                     source_proxy_url=EXCLUDED.source_proxy_url,
                     local_path=EXCLUDED.local_path,
-                    title=EXCLUDED.title,
-                    content_type=EXCLUDED.content_type,
                     file_name=EXCLUDED.file_name,
-                    description=EXCLUDED.description,
+                    content_type=EXCLUDED.content_type,
+                    size=EXCLUDED.size,
                     is_spoiler=EXCLUDED.is_spoiler,
-                    size=EXCLUDED.size
+                    title=EXCLUDED.title,
+                    markdown=EXCLUDED.markdown
+                """,
+                (cls.attachments_to_tuple(attachment_data) for attachment_data in attachments_data)
+            )
+        except aiosqlite.Error as err:
+            print(f"Upsert attachments failed: {err}")
+            await cls.rollback(db)
+            
+    @classmethod
+    async def select_attachments_by_message_id(
+        cls, db: aiosqlite.Connection, message_id: int
+    ) -> list[dict[str, Any]]:
+        return await cls.fetch_all_dicts(
+            db,
+            "SELECT * FROM DiscordAttachments WHERE message_id=?",
+            (message_id,)
+        )
+        
+    @classmethod
+    async def delete_attachments_by_message_id(
+        cls, db: aiosqlite.Connection, message_id: int
+    ):
+        await db.execute(
+            "DELETE FROM DiscordAttachments WHERE message_id=?",
+            (message_id,)
+        )
+            
+    # --- Reactions ---
+    
+    @classmethod
+    async def upsert_reactions(cls, db: aiosqlite.Connection, message: discord.Message):
+        try:
+            await db.executemany(
+                """
+                INSERT INTO DiscordReactions(message_id, emoji, count, users_json)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(message_id, emoji) DO UPDATE SET
+                    count=EXCLUDED.count,
+                    users_json=EXCLUDED.users_json
                 """,
                 (
-                    attachment.id, message_id, attachment.url, attachment.proxy_url,
-                    str(path), attachment.title, attachment.content_type,
-                    attachment.filename, attachment.description, attachment.is_spoiler,
-                    attachment.size
+                    (
+                        message.id,
+                        str(r.emoji),
+                        r.count,
+                        cls._json_dump([u.id for u in await r.users().flatten()])
+                    )
+                    for r in message.reactions
                 )
             )
         except aiosqlite.Error as err:
-            print(f"Upsert attachment failed: {err}")
+            print(f"Upsert reactions failed: {err}")
             await cls.rollback(db)
-
+            
     @classmethod
-    async def select_message(cls, message_id: int) -> dict[str, Any] | None:
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                row = await cls.fetch_one_dict(db, "SELECT * FROM DiscordMessage WHERE message_id=?", (message_id,))
-                if row:
-                    row['created_at'] = cls._from_ts(row['created_at'])
-                    row['edited_at'] = cls._from_ts(row['edited_at'])
-                return row
-        except aiosqlite.Error as err:
-            print(f"Select message failed: {err}")
-            return None
+    async def select_reactions_by_message_id(
+        cls, db: aiosqlite.Connection, message_id: int
+    ) -> list[dict[str, Any]]:
+        return await cls.fetch_all_dicts(
+            db,
+            "SELECT * FROM DiscordReactions WHERE message_id=?",
+            (message_id,)
+        )
         
     @classmethod
-    async def select_reply(cls, user_id: int, references_message_id: int) -> dict[str, Any] | None:
+    async def delete_reactions_by_message_id(
+        cls, db: aiosqlite.Connection, message_id: int
+    ):
+        await db.execute(
+            "DELETE FROM DiscordReactions WHERE message_id=?",
+            (message_id,)
+        )
+        
+    # --- Context ---
+    
+    @classmethod
+    async def select_context_window(
+        cls,
+        channel_id: int,
+        limit: int = 50,
+        before_ts: int | None = None
+    ) -> list[dict[str, Any]]:
         try:
             async with aiosqlite.connect(cls.DB_PATH) as db:
-                row = await cls.fetch_one_dict(db, "SELECT * FROM DiscordMessage WHERE user_id=? AND references_message_id=?", (user_id, references_message_id))
-                if row:
+                params = [channel_id]
+                where = "channel_id=?"
+
+                if before_ts:
+                    where += " AND created_at<?"
+                    params.append(before_ts)
+
+                query = f"""
+                    SELECT *
+                    FROM DiscordMessage
+                    WHERE {where}
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """
+                params.append(limit)
+
+                rows = await cls.fetch_all_dicts(db, query, tuple(params))
+                rows.reverse()  # chronological
+
+                for row in rows:
                     row['created_at'] = cls._from_ts(row['created_at'])
                     row['edited_at'] = cls._from_ts(row['edited_at'])
-                return row
-        except aiosqlite.Error as err:
-            print(f"Select reply failed: {err}")
-            return None
 
-    @classmethod
-    async def select_messages_by_channel(cls, channel_id: int) -> list[dict[str, Any]]:
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                rows = await cls.fetch_all_dicts(db, "SELECT * FROM DiscordMessage WHERE channel_id=?", (channel_id,))
-                for r in rows:
-                    r['created_at'] = cls._from_ts(r['created_at'])
-                    r['edited_at'] = cls._from_ts(r['edited_at'])
                 return rows
         except aiosqlite.Error as err:
-            print(f"Select messages failed: {err}")
+            print(f"Select context window failed: {err}")
             return []
-
-    @classmethod
-    async def delete_message(cls, message_id: int):
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                await db.execute("DELETE FROM DiscordMessage WHERE message_id=?", (message_id,))
-                await db.commit()
-        except aiosqlite.Error as err:
-            print(f"Delete message failed: {err}")
-            await cls.rollback(db)
-
-    @classmethod
-    async def update_message_reactions(cls, message_id: int, reactions: list[discord.Reaction]):
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                reactions_json = cls._json_dump([{'emoji': str(r.emoji), 'count': r.count, 'me': r.me} for r in reactions])
-                await db.execute("UPDATE DiscordMessage SET reactions=? WHERE message_id=?", (reactions_json, message_id))
-                await db.commit()
-        except aiosqlite.Error as err:
-            print(f"Update reactions failed: {err}")
-            await cls.rollback(db)
-
+            
     # --- User Memory ---
     @classmethod
     async def upsert_user_memory(cls, memory: dict[str, Any]):
@@ -587,35 +537,4 @@ class SQLiteDAO:
                 
         except aiosqlite.Error as err:
             print(f"Dump failed: {err}")
-            return None
-        
-    @classmethod
-    async def dump(cls) -> io.BytesIO | None:
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                buffer = io.BytesIO()
-                async for line in db.iterdump():
-                    buffer.write(f"{line}\n".encode('utf-8'))
-                buffer.seek(0)
-                return buffer
-                
-        except aiosqlite.Error as err:
-            print(f"Dump failed: {err}")
-            return None   
-            
-    @classmethod
-    async def count_rows(cls) -> dict[str,int] | None:
-        table_counts = {}
-        try:
-            async with aiosqlite.connect(cls.DB_PATH) as db:
-                async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name") as cursor:
-                    async for row in cursor:
-                        table_name = row[0]
-                        async with db.execute(f"SELECT count(*) FROM {table_name}") as cursor2:
-                            result = await cursor2.fetchone()
-                            table_counts[table_name] = result[0]
-            return table_counts
-
-        except aiosqlite.Error as err:
-            print(f"Row count failed: {err}")
             return None

@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS DiscordGuilds (
     guild_id INTEGER PRIMARY KEY,
     guild_name TEXT,
     guild_description TEXT,
-    nsfw_level TEXT, -- enum
-    verification_level TEXT, -- enum
+    nsfw_level INTEGER, -- enum
+    verification_level INTEGER, -- enum
     filesize_limit INTEGER, -- bytes
     created_at INTEGER -- dtime
 );
@@ -15,40 +15,69 @@ CREATE TABLE IF NOT EXISTS DiscordTextChannels (
     guild_id INTEGER,
     channel_name TEXT,
     channel_topic TEXT,
-    channel_type TEXT,
+    channel_type INTEGER -- enum,
+    permissions_json TEXT,
     is_nsfw INTEGER DEFAULT 0, -- Boolean
     created_at INTEGER, -- dtime
-    permissions_json TEXT,
     FOREIGN KEY (guild_id) REFERENCES DiscordGuilds(guild_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS DiscordMessage (
     message_id INTEGER PRIMARY KEY,
-    user_id INTEGER,
-    channel_id INTEGER,
-    text TEXT,
-    token_count INTEGER NULL,
-    edited_at INTEGER NULL, -- dtime, null if unedited
-    reactions TEXT DEFAULT '{}',              -- JSON blob
-    created_at INTEGER DEFAULT (strftime('%s','now')),
-    references_message_id INTEGER NULL, -- ID of message its replying to if any
+    user_id INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    guild_id INTEGER NOT NULL,
+
+    content TEXT,                 -- cleaned message text
+    token_count INTEGER NOT NULL, -- precomputed for LLM budgeting
+
+    reference_message_id INTEGER NULL,
+
+    created_at INTEGER NOT NULL,
+    edited_at INTEGER NULL,
+
+    FOREIGN KEY (guild_id) REFERENCES DiscordGuilds(guild_id) ON DELETE CASCADE,
     FOREIGN KEY (channel_id) REFERENCES DiscordTextChannels(channel_id) ON DELETE CASCADE,
-    FOREIGN KEY (references_message_id) REFERENCES DiscordMessage(message_id) ON DELETE SET NULL
+    FOREIGN KEY (reference_message_id) REFERENCES DiscordMessage(message_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS DiscordMessageMentions (
+    message_id INTEGER NOT NULL,
+
+    mention_text TEXT NOT NULL, -- @Everyone, @Here, @Sable, #channel-name
+    mention_id INTEGER NULL,    -- user_id, channel_id, role_id, or NULL
+
+    PRIMARY KEY (message_id, mention_id, mention_text),
+    FOREIGN KEY (message_id) REFERENCES DiscordMessage(message_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS DiscordReactions (
+    message_id INTEGER NOT NULL,
+    emoji TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    users_json TEXT NOT NULL,
+
+    PRIMARY KEY (message_id, emoji),
+    FOREIGN KEY (message_id) REFERENCES DiscordMessage(message_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS DiscordAttachments (
     attachment_id INTEGER PRIMARY KEY,
-    message_id INTEGER,
-    source_url TEXT, -- Location it was downloaded from
-    source_proxy_url TEXT, 
-    local_path TEXT, -- Location it was downloaded to
-    title TEXT,
-    content_type TEXT,
+    message_id INTEGER NOT NULL,
+
+    source_url TEXT,
+    source_proxy_url TEXT,
+    local_path TEXT,
+
     file_name TEXT,
-    description TEXT,
-    is_spoiler INTEGER, -- Boolean,
+    content_type TEXT,
     size INTEGER,
-    FOREIGN KEY (message_id) REFERENCES DiscordMessage(message_id)
+    is_spoiler INTEGER DEFAULT 0,
+
+    title TEXT,
+    markdown TEXT,
+
+    FOREIGN KEY (message_id) REFERENCES DiscordMessage(message_id) ON DELETE CASCADE
 );
 
 -- Layer 2: Long-term Identity / Persistent Memory
@@ -74,15 +103,6 @@ CREATE TABLE IF NOT EXISTS UserMemory (
 
 -- Layer 3: Transient / Runtime AI State
 
-CREATE TABLE IF NOT EXISTS AIStateSnapshot (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scope TEXT,             -- 'global', 'server', 'channel', 'user'
-    scope_id INTEGER,       -- foreign key if applicable
-    state_json TEXT,        -- stores runtime variables, mood, context, etc
-    model_version TEXT,     -- version of the AI model
-    created_at INTEGER DEFAULT (strftime('%s','now'))
-);
-
 CREATE TABLE IF NOT EXISTS PersonaTransient (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry TEXT,
@@ -100,6 +120,9 @@ CREATE TABLE IF NOT EXISTS UserMemoryTransient (
 
 -- Indexing
 
-CREATE INDEX IF NOT EXISTS idx_DiscordMessage_channel ON DiscordMessage(channel_id);
-CREATE INDEX IF NOT EXISTS idx_DiscordMessage_user ON DiscordMessage(user_id);
-CREATE INDEX IF NOT EXISTS idx_DiscordAttachments_message ON DiscordAttachments(message_id);
+CREATE INDEX IF NOT EXISTS idx_msg_channel_time ON DiscordMessage(channel_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_msg_user ON DiscordMessage(user_id);
+CREATE INDEX IF NOT EXISTS idx_msg_reference ON DiscordMessage(reference_message_id);
+CREATE INDEX IF NOT EXISTS idx_mentions_message ON DiscordMessageMentions(message_id);
+CREATE INDEX IF NOT EXISTS idx_attachments_message ON DiscordAttachments(message_id);
+CREATE INDEX IF NOT EXISTS idx_reactions_message ON DiscordReactions(message_id);
