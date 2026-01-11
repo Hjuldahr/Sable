@@ -76,7 +76,7 @@ class SQLiteMessageDAO(SQLiteDAO):
         except aiosqlite.Error as err:
             print(f"Select message failed: {err}")
             return None
-        
+    
     @classmethod
     async def select_reply(cls, references_message_id: int) -> dict[str, Any] | None:
         try:
