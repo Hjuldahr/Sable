@@ -1,31 +1,46 @@
 import asyncio
 import atexit
+import audioop
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime
+import discord
+from discord.ext import commands
+from dotenv import load_dotenv
 import io
+from llama_cpp import Llama
 import os
 from pathlib import Path
 import re
 import signal
 from typing import Any, Optional
-import discord
-from discord.ext import commands
-from dotenv import load_dotenv
-from llama_cpp import Llama
 import vosk
 
 class UserAudioSink(discord.sinks.Sink):
     def __init__(self):
         super().__init__()
         self.buffers = defaultdict(io.BytesIO)
+        self.recognizers = defaultdict(make_recognizer)
 
-    def write(self, data, user):
+    def write(self, data: bytes, user: discord.User):
         if user.bot:
             return
-        #discord.opus.Decoder
-        self.buffers[user.id].write(data)
 
+        # data is 48kHz, 16-bit, stereo PCM
+        # Convert to mono
+        mono = audioop.tomono(data, 2, 1, 1)
+
+        # Resample 48kHz -> 16kHz
+        mono_16k, _ = audioop.ratecv(
+            mono,          # input
+            2,             # sample width (16-bit)
+            1,             # channels
+            48000,         # input rate
+            16000,         # output rate
+            None
+        )
+
+        self.buffers[user.id].write(mono_16k)
 # ------------------- Constants -------------------
 
 SABLES_FAV_COLOUR = discord.Colour(0x0077BE)
@@ -89,6 +104,12 @@ executor = ThreadPoolExecutor(
 )
 
 # ------------------- Helper functions -------------------
+
+def make_recognizer():
+    return vosk.KaldiRecognizer(VOSK_MODEL, VOSK_SAMPLERATE)
+
+async def recording_finished(sink: UserAudioSink, vc: discord.VoiceClient):
+    print(f"[voice] recording finished in {vc.channel}")
 
 def token_estimator(text: str) -> int:
     return len(tokenizer.encode(text)) if text.strip() else 0
@@ -160,52 +181,61 @@ async def voice_recording_task(vc: discord.VoiceClient):
             for user_id, stream in sink.buffers.items():
                 stream.seek(0)
                 data = stream.read()
-                if data:
-                    # Feed raw audio to Vosk
-                    if REC.AcceptWaveform(data):
-                        result = REC.Result()
-                        print(f"User {user_id} said: {result}")
-                    else:
-                        partial = REC.PartialResult()
-                        # optional: handle partial transcription
+                stream.truncate(0)
+                stream.seek(0)
 
-                stream.seek(0, io.SEEK_END)  # reset pointer to append new audio
-            await asyncio.sleep(0.5)
+                if not data:
+                    continue
+
+                rec = sink.recognizers[user_id]
+
+                if rec.AcceptWaveform(data):
+                    result = rec.Result()
+                    print(f"[speech][{user_id}] {result}")
+                    # TODO accumalate window of words until end of conversation
+                    # TODO prompt AI if Sable is mentioned by name
+                else:
+                    partial = rec.PartialResult()
+                    # optional: handle partials
+
+            await asyncio.sleep(0.25)
+
     finally:
         if vc.is_recording():
             vc.stop_recording()
 
-@bot.tree.command(name="join", description="Request Sable to join a guild voice channel")
-async def join(interaction: discord.Interaction, voice_channel: Optional[discord.VoiceChannel] = None):
-    # Determine which channel to join
-    target_channel = voice_channel or (interaction.user.voice.channel if interaction.user.voice else None)
-
-    if not target_channel:
+@bot.tree.command(name="join")
+async def join(interaction: discord.Interaction):
+    if not interaction.user.voice:
         return await interaction.response.send_message(
-            "You must be in a voice channel or specify one!", ephemeral=True
+            "You must be in a voice channel.", ephemeral=True
         )
 
+    channel = interaction.user.voice.channel
+    vc = interaction.guild.voice_client
+
+    if vc:
+        await vc.move_to(channel)
+    else:
+        vc = await channel.connect()
+
+    bot.loop.create_task(voice_recording_task(vc))
+    await interaction.response.send_message(
+        f"Joined **{channel.name}** and listening.", ephemeral=True
+    )
+
+@bot.tree.command(name="leave")
+async def leave(interaction: discord.Interaction):
     vc = interaction.guild.voice_client
     if vc:
-        if vc.channel.id != target_channel.id:
-            await vc.move_to(target_channel)
+        await vc.disconnect()
+        await interaction.response.send_message(
+            "Disconnected and stopped listening.", ephemeral=True
+        )
     else:
-        vc = await target_channel.connect()
-
-    # Start the background recording task automatically
-    bot.loop.create_task(voice_recording_task(vc))
-
-    await interaction.response.send_message(f"Joined **{target_channel.name}** and started recording.", ephemeral=True)
-
-@bot.tree.command(name="leave", description="Request Sable to leave from voice")
-async def leave(itx: discord.Interaction):
-    voice_client = itx.guild.voice_client  
-    
-    if voice_client:
-        await voice_client.disconnect()
-        await itx.response.send_message("Disconnected from the voice channel.", ephemeral=True)
-    else:
-        await itx.response.send_message("I am not currently in a voice channel.", ephemeral=True)
+        await interaction.response.send_message(
+            "I'm not in a voice channel.", ephemeral=True
+        )
 
 # ------------------- Shutdown -------------------
 
