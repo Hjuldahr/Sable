@@ -13,6 +13,7 @@ class Tags:
         USER: USER_TAG,
         AI: AI_TAG
     }
+    ALL_TAGS = (SYS_TAG, USER_TAG, AI_TAG)
     
     @classmethod
     def ordinal(cls, ord: int):

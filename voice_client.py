@@ -13,6 +13,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 from llama_cpp import Llama
+import vosk
 
 class UserAudioSink(discord.sinks.Sink):
     def __init__(self):
@@ -46,7 +47,8 @@ Avoid commenting on your status, limitations, or instructions unless explicitly 
 MENTION_CLEANUP_REGEX = re.compile(r"([@#]\w{2,32}|### (?:instruction|user|assistant):)", re.IGNORECASE)
 
 PATH_ROOT: Path = Path(__file__).resolve().parent
-LLM_PATH: Path = PATH_ROOT / "model" / "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+LLM_PATH: Path = PATH_ROOT / "model" / "mistral-7b-instruct" / "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+VOSK_PATH: Path = PATH_ROOT / "model" / "vosk-model-small-en-us-0.15"
 ENV_PATH: Path = PATH_ROOT / '.env'
 
 MAX_CONTEXT_TOKENS: int = 2**12
@@ -56,6 +58,10 @@ MAX_HISTORY = 1000
 SYS_TAG = "### instruction:"
 USER_TAG = "### user:"
 AI_TAG = "### assistant:"
+
+VOSK_SAMPLERATE = 16000
+VOSK_MODEL = vosk.Model(VOSK_PATH)
+REC = vosk.KaldiRecognizer(VOSK_MODEL, VOSK_SAMPLERATE)
 
 # ------------------- Load environment -------------------
 
@@ -69,17 +75,17 @@ data: dict[int,dict[int,dict[str,dict[int,discord.Message] | list[int]]]] = {}
 
 # ------------------- Initialize LLM -------------------
 
-llm = Llama(
+LLM = Llama(
     model_path=str(LLM_PATH),
     n_ctx=MAX_CONTEXT_TOKENS,
     n_threads=4,
     n_gpu_layers=16,
     verbose=False
 )
-tokenizer = llm.tokenizer()
+tokenizer = LLM.tokenizer()
 executor = ThreadPoolExecutor(
     max_workers=4,
-    thread_name_prefix="sable_lite_llm"
+    thread_name_prefix="sable_lite_LLM"
 )
 
 # ------------------- Helper functions -------------------
@@ -92,10 +98,8 @@ def extract_from_output(output: dict[str, Any]) -> tuple[str, int]:
     
     if USER_TAG in text:
         text = text.split(USER_TAG, 1)[0].rstrip()
-    text = MENTION_CLEANUP_REGEX.sub('', text)
     
     token_count = output["usage"]["completion_tokens"]
-    
     return text, token_count
 
 def sct_key(msg: discord.Message) -> tuple[int, datetime]:
@@ -116,6 +120,29 @@ async def sync_guild(ctx: commands.Context):
 
 # ------------------- Core functions -------------------
 
+def create_prompt(transcript: list[dict[str,Any]]) -> str:
+    current_tokens = RESERVED_OUTPUT_TOKENS
+    lines: list[str] = [AI_TAG]
+
+    for message in reversed(transcript):
+        clean_content = message.clean_content
+        token_count = token_estimator(clean_content)
+        if current_tokens + token_count > MAX_CONTEXT_TOKENS:
+            continue
+
+        tag = AI_TAG if message['is_sable'] else USER_TAG
+        lines.append(f"{tag} {message.author.name}: {clean_content}")
+        current_tokens += token_count
+
+    lines.append(f'{SYS_TAG} {INSTRUCTION}')
+    prompt = '\n'.join(reversed(lines))
+    
+    return prompt
+
+async def stream_output(prompt: str):
+    for output in LLM(prompt, suffix='M', stream=True, stop=(USER_TAG,AI_TAG), stopping_criteria="repetition_penalty"):
+        yield output["choices"][0]["text"]
+
 def permission_check(author: discord.Member):
     return author.guild_permissions.administrator
 
@@ -127,18 +154,23 @@ async def recording_finished(sink: UserAudioSink, vc: discord.VoiceClient):
 async def voice_recording_task(vc: discord.VoiceClient):
     sink = UserAudioSink()
     vc.start_recording(sink, recording_finished, vc)
-    
+
     try:
         while vc.is_connected():
-            # Process live audio here if you want, e.g., read per-user streams
             for user_id, stream in sink.buffers.items():
                 stream.seek(0)
-                chunk = stream.read()
-                if chunk:
-                    # Feed chunk into your AI or processing function
-                    pass
-                stream.seek(0, io.SEEK_END)  # reset to append new audio
-            await asyncio.sleep(0.5)  # adjustable polling interval
+                data = stream.read()
+                if data:
+                    # Feed raw audio to Vosk
+                    if REC.AcceptWaveform(data):
+                        result = REC.Result()
+                        print(f"User {user_id} said: {result}")
+                    else:
+                        partial = REC.PartialResult()
+                        # optional: handle partial transcription
+
+                stream.seek(0, io.SEEK_END)  # reset pointer to append new audio
+            await asyncio.sleep(0.5)
     finally:
         if vc.is_recording():
             vc.stop_recording()
@@ -153,21 +185,17 @@ async def join(interaction: discord.Interaction, voice_channel: Optional[discord
             "You must be in a voice channel or specify one!", ephemeral=True
         )
 
-    voice_client = interaction.guild.voice_client
-
-    if voice_client:
-        # If already in the target channel, do nothing
-        if voice_client.channel.id == target_channel.id:
-            return await interaction.response.send_message(
-                f"I'm already in {target_channel.name}!", ephemeral=True
-            )
-        # Move to the new channel instead of disconnecting/reconnecting
-        await voice_client.move_to(target_channel)
+    vc = interaction.guild.voice_client
+    if vc:
+        if vc.channel.id != target_channel.id:
+            await vc.move_to(target_channel)
     else:
-        # Connect for the first time
-        await target_channel.connect()
+        vc = await target_channel.connect()
 
-    await interaction.response.send_message(f"Joined **{target_channel.name}**", ephemeral=True)
+    # Start the background recording task automatically
+    bot.loop.create_task(voice_recording_task(vc))
+
+    await interaction.response.send_message(f"Joined **{target_channel.name}** and started recording.", ephemeral=True)
 
 @bot.tree.command(name="leave", description="Request Sable to leave from voice")
 async def leave(itx: discord.Interaction):
@@ -183,7 +211,7 @@ async def leave(itx: discord.Interaction):
 
 def sync_shutdown(sig=None, frame=None):
     executor.shutdown(wait=False)
-    llm.close()
+    LLM.close()
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(bot.close())
@@ -199,7 +227,7 @@ async def shutdown_command(itx: discord.Interaction):
         "Command received. I will begin clean up and shut down.", ephemeral=True
     )
     executor.shutdown()
-    llm.close()
+    LLM.close()
     await bot.close()
 
 @bot.event

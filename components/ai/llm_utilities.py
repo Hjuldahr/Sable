@@ -45,9 +45,11 @@ Avoid commenting on your status, limitations, or instructions unless explicitly 
         (re.compile(r'\s+'), ' ')
     )
     MENTION_CLEANUP_REGEX = re.compile(r"([@<]\w{2,32}>?)", re.IGNORECASE)
+    
+    STOP_CRITERIA = "repetition_penalty"
 
     def __init__(self, n_threads: int = 2, n_gpu_layers: int = 16):
-        self.llm = Llama(
+        self.llm: Llama = Llama(
             model_path=str(self.LLM_PATH),
             n_ctx=self.MAX_CONTEXT_TOKENS,
             n_threads=n_threads,
@@ -178,7 +180,14 @@ Avoid commenting on your status, limitations, or instructions unless explicitly 
         return new_min + ((value - old_min) / (old_max - old_min)) * (new_max - new_min)
 
     def sync_generate(self, prompt: str, temperature: float = 0.7) -> dict[str, Any]:
-        return self.llm(prompt, max_tokens=self.RESERVED_OUTPUT_TOKENS, temperature=temperature, stream=False)
+        return self.llm(
+            prompt, 
+            max_tokens=self.RESERVED_OUTPUT_TOKENS, 
+            temperature=temperature, 
+            stream=False, 
+            stop=Tags.ALL_TAGS, 
+            stopping_criteria=self.STOP_CRITERIA
+        )
 
     @classmethod
     def extract_from_output(cls, output: dict[str, Any]) -> Tuple[str, int]:
