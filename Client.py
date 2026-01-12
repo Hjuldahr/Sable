@@ -35,6 +35,15 @@ sable = Coordinator(ai_user_id, 'Sable')
 TEXT_DISTILLATION_REGEX = re.compile(r'(\W+|<[@#][!&]?\d{17,20}>|@everyone|@here)+')
 TABLE_NAME_REGEX = re.compile(r'(?<!^)([A-Z])')
 
+@bot.command()
+@commands.is_owner()
+async def sync(ctx):
+    """push your local slash commands to Discord's servers""" 
+    
+    await bot.tree.sync()
+    await ctx.send("Slash commands synchronized")
+    print("Slash commands synchronized")
+
 def permission_check(author: discord.Member):
     return author.guild_permissions.administrator
 

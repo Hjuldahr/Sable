@@ -96,6 +96,15 @@ def extract_from_output(output: dict[str, Any]) -> tuple[str, int]:
 def sct_key(msg: discord.Message) -> tuple[int, datetime]:
     return ((msg.reference.message_id or msg.id) if msg.reference else msg.id, msg.created_at)
 
+@bot.command()
+@commands.is_owner()
+async def sync(ctx):
+    """push your local slash commands to Discord's servers""" 
+    
+    await bot.tree.sync()
+    await ctx.send("Slash commands synchronized")
+    print("Slash commands synchronized")
+
 # ------------------- Core functions -------------------
 
 async def generate(history: list[discord.Message]):
@@ -239,6 +248,9 @@ async def shutdown_command(interaction: discord.Interaction):
     if not permission_check(interaction.user):
         await interaction.response.send_message("Insufficient privileges to request shutdown.")
         return
+    await interaction.response.send_message(
+        "Command received. I will begin clean up and shut down.", ephemeral=True
+    )
     executor.shutdown()
     llm.close()
     await bot.close()

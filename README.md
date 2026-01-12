@@ -7,7 +7,7 @@ It’s designed for experimentation, learning, and personal server use.
 ## Tech Stack
 - **Python:** 3.12.*
 - **Database:** Async SQLite (aiosqlite)
-- **Discord API:** discord.py
+- **Discord API:** Pycord
 - **LLM:** Local Quantized Mistral (mistral-7b-instruct-v0.1.Q4_K_M.gguf)
 - **Inference:** llama-cpp-python
 
@@ -39,8 +39,6 @@ DISCORD_BOT_TOKEN=Your_Bot_Token
 ### 4. Python Environment
 - Install **Python 3.12.\*** from https://www.python.org/downloads/release/python-31210/\
 - Install **dependencies**:
-`pip install aiosqlite aiofiles llama-cpp-python discord.py python-dotenv markitdown nltk urlextract`
-- Or via **requirements.txt**: 
 `pip install -r requirements.txt`
 ### 5. Language Model
 - Download **Mistral 7B Instruct (GGUF, Q4_K_M)**:\
