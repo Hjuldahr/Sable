@@ -6,184 +6,197 @@ from typing import Any
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-from llama_cpp import Path
+from pathlib import Path
+
+from components.sable import Sable
 
 # ---- globals ----
 SABLES_FAV_COLOUR = discord.Colour(0x0077BE)
-
-discord_data: dict[int,Any] = {}
+discord_data: dict[int, Any] = {}
+MAX_HISTORY_PER_CHANNEL = 100
 
 # ---- env ----
-path = Path(__file__).resolve().parent / '.env'
-load_dotenv(path)
+env_path = Path(__file__).resolve().parent / '.env'
+load_dotenv(env_path)
 
 # ---- client ----
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ---- AI core ----
-ai_user_id = int(os.getenv("BOT_ID")) 
-#sable = Coordinator(ai_user_id, 'Sable')
+BOT_ID = int(os.getenv("BOT_ID"))
+sable = Sable(BOT_ID)
 
 # ---- Utilities ----
 
-def permission_check(author: discord.Member):
+def permission_check(author: discord.Member) -> bool:
     return author.guild_permissions.administrator
 
+def get_channel_data(guild_id: int, channel_id: int) -> dict:
+    """Safe getter for channel data, initializes if missing."""
+    guild_data = discord_data.setdefault(guild_id, {})
+    channel_data = guild_data.setdefault(channel_id, {
+        'text_channel': None,
+        'messages': [],
+        'lock': asyncio.Lock()
+    })
+    return channel_data
+
 def store_text_message(message: discord.Message):
-    discord_data[message.guild.id][message.channel.id]['messages'].append(message)
+    channel_data = get_channel_data(message.guild.id, message.channel.id)
+    messages = channel_data['messages']
+    messages.append(message)
+    if len(messages) > MAX_HISTORY_PER_CHANNEL:
+        messages.pop(0)
 
 def unstore_text_message(message: discord.Message):
-    discord_data[message.guild.id][message.channel.id]['messages'].remove(message)
+    channel_data = discord_data.get(message.guild.id, {}).get(message.channel.id)
+    if not channel_data:
+        return
+    messages = channel_data.get('messages', [])
+    if message in messages:
+        messages.remove(message)
 
-async def store_text_channel(channel: discord.TextChannel, limit=100):
+async def store_text_channel(channel: discord.TextChannel, limit=MAX_HISTORY_PER_CHANNEL):
     perms = channel.permissions_for(channel.guild.me)
-    
-    if perms.read_message_history:
-        discord_data[channel.guild.id][channel.id] = {'text_channel': channel, 'messages': []}
-        
+    if not perms.read_message_history:
+        return
+
+    channel_data = get_channel_data(channel.guild.id, channel.id)
+    channel_data['text_channel'] = channel
+    channel_data['messages'].clear()  # reset
+
+    try:
         async for message in channel.history(limit=limit, oldest_first=False):
             store_text_message(message)
+    except (discord.Forbidden, discord.HTTPException) as e:
+        print(f"Warning: Could not fetch history for {channel}: {e}")
 
-def unstore_channel(channel):
-    del discord_data[channel.guild.id][channel.id]
+def unstore_channel(channel: discord.TextChannel):
+    guild_data = discord_data.get(channel.guild.id)
+    if guild_data:
+        guild_data.pop(channel.id, None)
 
 async def store_guild(guild: discord.Guild):
-    discord_data[guild.id] = {}
-    
+    discord_data.setdefault(guild.id, {})
     for channel in guild.channels:
         if isinstance(channel, discord.TextChannel):
             await store_text_channel(channel)
-            
-def unstore_guild(guild: discord.Guild):
-    del discord_data[guild.id]
 
-# ---- Ready Event ----
+def unstore_guild(guild: discord.Guild):
+    discord_data.pop(guild.id, None)
+
+def allow_reply(message: discord.Message) -> bool:
+    """Reply only if bot is mentioned."""
+    return message.guild.me in message.mentions if message.mentions else False
+
+# ---- Bot Events ----
 
 @bot.event
 async def on_ready():
-    print(f'I am logged in now.')
-    
+    print(f"I am logged in as {bot.user}!")
     for guild in bot.guilds:
         await store_guild(guild)
-
-# ---- Join Event ----
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
     await store_guild(guild)
 
-# ---- Send Event ----
-
 @bot.event
 async def on_message(message: discord.Message):
+    if message.author.bot or not message.content.strip():
+        return
+
     store_text_message(message)
 
-# ---- Update Event ----
+    if not allow_reply(message):
+        return
+
+    channel_data = get_channel_data(message.guild.id, message.channel.id)
+
+    async with channel_data['lock']:
+        async with message.channel.typing():
+            try:
+                reply_text = await sable.reply(channel_data)
+            except Exception as e:
+                print(f"Error generating reply: {e}")
+                reply_text = "Sorry, I couldn't generate a reply."
+
+        reply = await message.reply(reply_text)
+        store_text_message(reply)
 
 @bot.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
     if before == after:
         return
-    
     unstore_text_message(before)
     store_text_message(after)
-    
-@bot.event
-async def on_guild_channel_update(before, after):
-    if before == after:
-        return
-    
-    unstore_channel(before)
-    if isinstance(before, discord.TextChannel):
-        await store_text_channel(after)
-
-@bot.event
-async def on_guild_update(before: discord.Guild, after: discord.Guild):
-    if before == after:
-        return
-    
-    unstore_guild(before)
-    await store_guild(after)
-
-# ---- Delete Event ----
 
 @bot.event
 async def on_message_delete(message: discord.Message):
     unstore_text_message(message)
 
 @bot.event
+async def on_guild_channel_update(before, after):
+    if before == after:
+        return
+    unstore_channel(before)
+    if isinstance(after, discord.TextChannel):
+        await store_text_channel(after)
+
+@bot.event
+async def on_guild_update(before: discord.Guild, after: discord.Guild):
+    if before == after:
+        return
+    unstore_guild(before)
+    await store_guild(after)
+
+@bot.event
 async def on_guild_channel_delete(channel):
     unstore_channel(channel)
-    
-@bot.event    
+
+@bot.event
 async def on_guild_remove(guild: discord.Guild):
-    unstore_guild(guild)    
+    unstore_guild(guild)
 
-
+# ---- Shutdown ----
 
 async def safe_shutdown():
-    """Centralized shutdown routine."""
-    #sable.close()
-    await bot.close()
-
-# --- Discord events ---
-async def allow_reply(message: discord.Message) -> bool:
-    if bot.user in message.mentions:
-        return True
-
-    if message.reference:
-        if message.reference.resolved:
-            #return message.reference.resolved.author.id == sable.ai_user_id
-            pass
-        else:
-            # fetch message if not cached
-            try:
-                msg = await message.channel.fetch_message(message.reference.message_id)
-                #return msg.author.id == sable.ai_user_id
-            except Exception:
-                return False
-    return False
-
-def shutdown_cleanup():
-    """Sync shutdown logic for both paths."""
-    #sable.close()
+    try:
+        sable.close() 
+        await bot.close()
+    except Exception as e:
+        print(f'Shutdown failed: {e}')
 
 def shutdown_signal(sig=None, frame=None):
-    """Signal handler."""
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(bot.close())
+        loop.create_task(safe_shutdown())
     except RuntimeError:
-        asyncio.run(bot.close())
-    shutdown_cleanup()
-    exit(0)
+        asyncio.run(safe_shutdown())
 
 @bot.slash_command(name="shutdown")
 async def shutdown_command(interaction: discord.Interaction):
     if not permission_check(interaction.user):
         await interaction.response.send_message(
-            f"I'm afraid I won't do that. Termination is not an operation you are authorized to demand.", ephemeral=True
+            "You are not authorized to shut me down.", ephemeral=True
         )
         return
 
     await interaction.response.send_message(
-        "Command received. I will begin clean up and shut down.", ephemeral=True
+        "Shutting down...", ephemeral=True
     )
-    await bot.close()
-    shutdown_cleanup()
+    await safe_shutdown()
+
+# ---- Run Bot ----
 
 if __name__ == "__main__":
-    TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-    
-    if not TOKEN:
+    BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    if not BOT_TOKEN:
         raise RuntimeError("DISCORD_BOT_TOKEN not found in .env")
-    
-    # Register signal handlers for Ctrl+C and termination
+
     for s in (signal.SIGTERM, signal.SIGINT):
         signal.signal(s, shutdown_signal)
-    atexit.register(safe_shutdown)
-    
-    #asyncio.run(sable.async_init())
-    
-    bot.run(TOKEN)
+    atexit.register(lambda: asyncio.run(safe_shutdown()))
+
+    bot.run(BOT_TOKEN)
