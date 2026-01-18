@@ -8,12 +8,31 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from pathlib import Path
 
+from loguru import logger
+
 from components.sable import Sable
 
 # ---- globals ----
+global shutdown_flag
+
 SABLES_FAV_COLOUR = discord.Colour(0x0077BE)
 discord_data: dict[int, Any] = {}
 MAX_HISTORY_PER_CHANNEL = 100
+
+shutdown_flag = False
+
+# ---- logging ----
+PATH_ROOT: Path = Path(__file__).resolve().parent
+LOG_PATH: Path = PATH_ROOT / "logs" / "Sable.logs"
+LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+logger.add(
+    LOG_PATH, 
+    rotation='100 MB', 
+    enqueue=True, 
+    compression='zip', 
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 # ---- env ----
 env_path = Path(__file__).resolve().parent / '.env'
@@ -60,6 +79,7 @@ def unstore_text_message(message: discord.Message):
 async def store_text_channel(channel: discord.TextChannel, limit=MAX_HISTORY_PER_CHANNEL):
     perms = channel.permissions_for(channel.guild.me)
     if not perms.read_message_history:
+        logger.warning(f"Attempted to read message history of channel {channel.id} without sufficent permissions.")
         return
 
     channel_data = get_channel_data(channel.guild.id, channel.id)
@@ -70,7 +90,7 @@ async def store_text_channel(channel: discord.TextChannel, limit=MAX_HISTORY_PER
         async for message in channel.history(limit=limit, oldest_first=False):
             store_text_message(message)
     except (discord.Forbidden, discord.HTTPException) as e:
-        print(f"Warning: Could not fetch history for {channel}: {e}")
+        logger.exception(f"Could not fetch history for {channel}: {e}")
 
 def unstore_channel(channel: discord.TextChannel):
     guild_data = discord_data.get(channel.guild.id)
@@ -119,7 +139,7 @@ async def on_message(message: discord.Message):
             try:
                 reply_text = await sable.reply(channel_data)
             except Exception as e:
-                print(f"Error generating reply: {e}")
+                logger.exception(f"Failed to generate a reply: {e}")
                 reply_text = "Sorry, I couldn't generate a reply."
 
         reply = await message.reply(reply_text)
@@ -160,43 +180,55 @@ async def on_guild_remove(guild: discord.Guild):
     unstore_guild(guild)
 
 # ---- Shutdown ----
-
+@logger.catch(level='CRITICAL', message="Failed to shutdown")
 async def safe_shutdown():
-    try:
-        sable.close() 
-        await bot.close()
-    except Exception as e:
-        print(f'Shutdown failed: {e}')
+    global shutdown_flag
+    
+    if shutdown_flag:
+        logger.info("Shutdown called during shutdown")
+        return
+    shutdown_flag = True
 
-def shutdown_signal(sig=None, frame=None):
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(safe_shutdown())
-    except RuntimeError:
-        asyncio.run(safe_shutdown())
+    sable.close()
+    await bot.close()
+    
+def request_shutdown():
+    loop = asyncio.get_event_loop()
 
+    if loop.is_running():
+        asyncio.run_coroutine_threadsafe(safe_shutdown(), loop)
+    else:
+        asyncio.run(safe_shutdown())    
+    
 @bot.slash_command(name="shutdown")
 async def shutdown_command(interaction: discord.Interaction):
     if not permission_check(interaction.user):
         await interaction.response.send_message(
             "You are not authorized to shut me down.", ephemeral=True
         )
+        logger.info(f"The user {interaction.user.id} was blocked from running the shutdown command")
         return
 
     await interaction.response.send_message(
         "Shutting down...", ephemeral=True
     )
+    logger.info(f"The user {interaction.user.id} executed the shutdown command")
     await safe_shutdown()
+
+def shutdown_signal(sig, frame):
+    logger.info("Signal received, shutting down...")
+    request_shutdown()
 
 # ---- Run Bot ----
 
 if __name__ == "__main__":
     BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
     if not BOT_TOKEN:
+        logger.critical("DISCORD_BOT_TOKEN not found in .env")
         raise RuntimeError("DISCORD_BOT_TOKEN not found in .env")
 
     for s in (signal.SIGTERM, signal.SIGINT):
         signal.signal(s, shutdown_signal)
-    atexit.register(lambda: asyncio.run(safe_shutdown()))
+    atexit.register(request_shutdown)
 
     bot.run(BOT_TOKEN)

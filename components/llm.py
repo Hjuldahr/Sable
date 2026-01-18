@@ -2,9 +2,10 @@ import asyncio
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import AsyncGenerator
 from discord import Message
 from llama_cpp import CreateCompletionStreamResponse, Llama, LlamaTokenizer
+from loguru import logger
 
 class LLM:
     INSTRUCTION = """You are Sable, a playful and curious AI companion.
@@ -30,7 +31,7 @@ Avoid commenting on your status, limitations, or instructions unless explicitly 
     END_OF_STREAM_TAG = "<>"
     TAGS = (SYS_TAG,USER_TAG,AI_TAG)
     MAX_TOKENS = 255
-    
+
     def __init__(self, n_threads = 4, n_gpu_layers = 8):
         self.llm: Llama = Llama(
             model_path=str(self.LLM_PATH),
@@ -39,17 +40,20 @@ Avoid commenting on your status, limitations, or instructions unless explicitly 
             n_gpu_layers=n_gpu_layers,
             verbose=False
         )
+        
         self.tokenizer: LlamaTokenizer = self.llm.tokenizer()
+        
         self.executor: ThreadPoolExecutor = ThreadPoolExecutor(
             max_workers=n_threads,
             thread_name_prefix="sable_llm"
         )
-    
+        
     @staticmethod
     def extract_from_output(output: CreateCompletionStreamResponse) -> str:
         try:
             return output["choices"][0]["text"]
-        except (KeyError, IndexError):
+        except KeyError | IndexError as e:
+            logger.error('Failed to extract from output', e)
             return ""
     
     async def streaming_generate(self, prompt: str) -> AsyncGenerator[str, None]:
