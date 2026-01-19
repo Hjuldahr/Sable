@@ -7,6 +7,8 @@ from discord import Message
 from llama_cpp import CreateCompletionStreamResponse, Llama, LlamaTokenizer
 from loguru import logger
 
+from components.moods import VAD, Moods
+
 class LLM:
     INSTRUCTION = """You are Sable, a playful and curious AI companion.
 You will be conversing within an online social communication platform environment called Discord, consisting of multiple users interacting with you and eachover across multiple text channels. 
@@ -56,11 +58,14 @@ Avoid commenting on your status, limitations, or instructions unless explicitly 
             logger.error('Failed to extract from output', e)
             return ""
     
-    async def streaming_generate(self, prompt: str) -> AsyncGenerator[str, None]:
+    async def streaming_generate(self, prompt: str, vad: VAD) -> AsyncGenerator[str, None]:
+        temperature = self.remap(vad.arousal, VAD.LOW, VAD.HIGH, self.LOWEST_TEMP, self.HIGHEST_TEMP)
+        
         stream = self.llm(
             prompt=prompt,
             suffix=self.END_OF_STREAM_TAG,
             max_tokens=self.MAX_TOKENS,
+            temperature=temperature
             stop=self.TAGS,
             stopping_criteria="repeat_penalty",
             stream=True
@@ -68,28 +73,35 @@ Avoid commenting on your status, limitations, or instructions unless explicitly 
         for frag in stream:
             yield self.extract_from_output(frag)
     
-    def sync_generate(self, prompt: str) -> str:
+    def sync_generate(self, prompt: str, vad: VAD) -> str:
+        temperature = self.remap(vad.arousal, VAD.LOW, VAD.HIGH, self.LOWEST_TEMP, self.HIGHEST_TEMP)
+        
         output = self.llm(
             prompt=prompt,
             max_tokens=self.MAX_TOKENS,
+            temperature=temperature
             stop=self.TAGS,
             stopping_criteria="repeat_penalty",
             stream=False
         )
+        
         return self.extract_from_output(output)
     
-    async def async_generate(self, prompt: str) -> str:
+    async def async_generate(self, prompt: str, vad: VAD) -> str:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self.executor, self.sync_generate, prompt)
+        return await loop.run_in_executor(self.executor, self.sync_generate, prompt, vad)
         
     def count_tokens(self, text: str) -> int:
         """Estimate tokens consumed by a single string."""
         return len(self.tokenizer.encode(text)) if text and not text.isspace() else 0
         
-    def assemble_instruction_prompt_str(self) -> str:
-        return self.INSTRUCTION
+    def assemble_instruction_prompt_str(self, vad: VAD) -> str:
+        top_moods = [m[0] for m in Moods.label_top_n_moods(vad, 3)]
+        mood_line = f"- Your current mood should be: {', '.join(Moods.ordinals(top_moods))}"
         
-    def sync_assemble_prompt_str(self, messages: list[Message]) -> str:
+        return "\n".join((self.INSTRUCTION, mood_line))
+        
+    def sync_assemble_prompt_str(self, messages: list[Message], vad: VAD) -> str:
         current_tokens = self.RESERVED_OUTPUT_TOKENS    
         lines = deque()
         # Body
@@ -103,15 +115,15 @@ Avoid commenting on your status, limitations, or instructions unless explicitly 
             lines.appendleft(text)
             
         # Header
-        lines.appendleft(self.assemble_instruction_prompt_str())
+        lines.appendleft(self.assemble_instruction_prompt_str(vad))
         # Trailer
         lines.append(self.AI_TAG)
         
         return "\n".join(lines) 
     
-    async def async_assemble_prompt_str(self, messages: list[Message]) -> str:
+    async def async_assemble_prompt_str(self, messages: list[Message], vad: VAD) -> str:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self.executor, self.sync_assemble_prompt_str, messages)
+        return await loop.run_in_executor(self.executor, self.sync_assemble_prompt_str, messages, vad)
     
     def __del__(self):
         self.executor.shutdown(wait=False)
