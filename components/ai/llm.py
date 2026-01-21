@@ -7,7 +7,7 @@ from discord import Message
 from llama_cpp import CreateCompletionStreamResponse, Llama, LlamaTokenizer
 from loguru import logger
 
-from components.moods import VAD, Moods
+from .moods import VAD, Moods
 
 class LLM:
     INSTRUCTION = """You are Sable, a playful and curious AI companion.
@@ -65,7 +65,7 @@ Avoid commenting on your status, limitations, or instructions unless explicitly 
             prompt=prompt,
             suffix=self.END_OF_STREAM_TAG,
             max_tokens=self.MAX_TOKENS,
-            temperature=temperature
+            temperature=temperature,
             stop=self.TAGS,
             stopping_criteria="repeat_penalty",
             stream=True
@@ -79,7 +79,7 @@ Avoid commenting on your status, limitations, or instructions unless explicitly 
         output = self.llm(
             prompt=prompt,
             max_tokens=self.MAX_TOKENS,
-            temperature=temperature
+            temperature=temperature,
             stop=self.TAGS,
             stopping_criteria="repeat_penalty",
             stream=False

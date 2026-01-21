@@ -1,6 +1,7 @@
 from discord import Message
-from components.llm import LLM
-from components.moods import VAD, VADTags, VADWords
+
+from .ai.llm import LLM
+from .ai.moods import VAD, VADTags, VADWords
 
 class Sable:
     USERNAME = 'Sable'
@@ -11,8 +12,6 @@ class Sable:
         self.vad = VAD(tag=VADTags.NEUTRAL)
         
     async def reply(self, messages: list[Message]) -> str:
-        # TODO re-add VAD emotion loopback
-
         message_vad = VADWords.score(messages[-1].clean_content)
         temp_vad = VAD(*self.vad)
         temp_vad.merge(message_vad, 0.2)
