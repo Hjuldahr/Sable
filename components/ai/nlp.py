@@ -4,7 +4,7 @@ import re
 from typing import Iterable, List, Dict
 import nltk
 
-class NLPUtilities:
+class NaturalLanguageProcessor:
     GENERIC_NOUNS = {
         "thing", "things", "stuff", "kind", "kinds", "type", "types"
     }

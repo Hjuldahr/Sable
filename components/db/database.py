@@ -63,6 +63,13 @@ class DatabaseManager:
         )
     
     # ---- AI Memories ----
+    async def insert_ai_memories(self, values: list[dict[str, Any]]):
+        async with self.db.transaction():
+            await self.db.execute_many(
+                "INSERT INTO AIMemories(entry, category) VALUES (:entry, :category)", 
+                values
+            )
+            
     async def insert_ai_memory(self, values: dict[str, Any]):
         async with self.db.transaction():
             await self.db.execute(
@@ -85,6 +92,13 @@ class DatabaseManager:
             )
     
     # ---- User Memories ----
+    async def insert_user_memories(self, values: list[dict[str, Any]]):
+        async with self.db.transaction():
+            await self.db.execute_many(
+                "INSERT INTO UserMemories(user_id, entry, category) VALUES (:user_id, :entry, :category)", 
+                values
+            )
+    
     async def insert_user_memory(self, values: dict[str, Any]):
         async with self.db.transaction():
             await self.db.execute(
@@ -95,6 +109,7 @@ class DatabaseManager:
                 "UPDATE UserProfiles(user_id) VALUES SET interaction_count = interaction_count + 1, last_interaction_at = (strftime('%s','now')) WHERE user_id = :user_id", 
                 values
             )
+        
             
     async def select_all_user_memories(self, user_id) -> list[dict]:
         async with self.db.transaction():

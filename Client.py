@@ -135,6 +135,8 @@ async def on_message(message: discord.Message):
 
     channel_data = get_channel_data(message.guild.id, message.channel.id)
 
+    await sable.read(message)
+
     async with channel_data['lock']:
         async with message.channel.typing():
             try:
