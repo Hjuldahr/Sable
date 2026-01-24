@@ -117,6 +117,7 @@ async def on_ready():
     print(f"I am logged in as {bot.user}!")
     for guild in bot.guilds:
         await store_guild(guild)
+    await sable.async_init()
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
@@ -189,7 +190,7 @@ async def safe_shutdown():
         return
     shutdown_flag = True
 
-    sable.close()
+    await sable.async_close()
     await bot.close()
     
 def request_shutdown():

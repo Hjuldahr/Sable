@@ -15,11 +15,11 @@ class DatabaseManager:
     def __init__(self):
         self.db: Database = Database(self.DB_URL)
     
-    async def _async_init(self):
+    async def async_init(self):
         await self.db.connect()
         await self.db.execute(self.SETUP_SCRIPT_PATH.read_text())
         
-    async def _async_close(self):
+    async def async_close(self):
         await self.db.disconnect()
     
     # ---- AI Profile ----
