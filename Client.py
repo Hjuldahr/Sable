@@ -40,7 +40,7 @@ load_dotenv(env_path)
 
 # ---- client ----
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix=["!","/"], intents=intents)
 
 # ---- AI core ----
 BOT_ID = int(os.getenv("BOT_ID"))

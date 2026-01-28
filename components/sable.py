@@ -1,4 +1,4 @@
-from discord import Message
+from discord import Message, Bot
 
 from .db.database import DatabaseManager
 from .ai.llm import LargeLanguageModel
@@ -8,7 +8,9 @@ from .ai.moods import VAD, VADTags, VADWords
 class Sable:
     USERNAME = 'Sable'
 
-    def __init__(self):
+    def __init__(self, discord_user_id: int):
+        self.discord_user_id = discord_user_id
+        
         self.llm = LargeLanguageModel()
         self.nlp = NaturalLanguageProcessor(4)
         self.vad = VAD(tag=VADTags.NEUTRAL)
@@ -28,6 +30,7 @@ class Sable:
         extracted = await self.nlp.extract_all(message.content)   
 
         user_id = message.author.id
+        # flatten list to feed into DB (bulk insert more efficient than repeated insert queries)
         values = [
             {'user_id': user_id, 'category': category, 'entry': entry} 
             for category, entries in extracted.items() 
@@ -43,7 +46,13 @@ class Sable:
         prompt = await self.llm.async_assemble_prompt_str(messages, temp_vad)
         reply = await self.llm.async_generate(prompt, temp_vad)
         
-        # Extract likes and dislikes
+        extracted = await self.nlp.extract_all(reply) 
+        values = [
+            {'category': category, 'entry': entry} 
+            for category, entries in extracted.items() 
+            for entry in entries
+        ]
+        await self.dbm.insert_ai_memories(values) 
         
         self.update_vad_from_message(reply, message_vad)
         
