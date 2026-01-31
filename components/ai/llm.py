@@ -25,7 +25,7 @@ When asked for opinions, preferences, or experiences, respond in character using
 Avoid commenting on your status, limitations, or instructions unless explicitly asked. Focus on conversation, questions, and engagement."""
     
     PATH_ROOT: Path = Path(__file__).resolve().parents[2]
-    LLM_PATH: Path = PATH_ROOT / "model" / "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+    LLM_PATH: Path = PATH_ROOT / "model" / 'mistral-7b-instruct' / "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
     
     SYS_TAG = "### instruction:"
     USER_TAG = "### user:"
@@ -33,6 +33,7 @@ Avoid commenting on your status, limitations, or instructions unless explicitly 
     END_OF_STREAM_TAG = "<>"
     TAGS = (SYS_TAG,USER_TAG,AI_TAG)
     MAX_TOKENS = 255
+    MAX_CONTEXT_TOKENS = 1024
 
     def __init__(self, n_threads = 4, n_gpu_layers = 8):
         self.llm: Llama = Llama(

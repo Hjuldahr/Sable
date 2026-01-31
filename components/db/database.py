@@ -1,27 +1,47 @@
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any
 from databases import Database
+import aiosqlite
 from loguru import logger
 
 class DatabaseManager:
     DB_URL = "sqlite+aiosqlite:///./data/db/database.db"
     
-    PATH_ROOT = Path(__file__).resolve().parents[2]
-    SETUP_SCRIPT_PATH = PATH_ROOT / 'components' / 'db' / 'setup.sqlite'
-    DB_PATH = PATH_ROOT / 'data' / 'sqlite' / 'database.db'
+    PATH_ROOT = Path(__file__).resolve().parent
+    SETUP_SCRIPT_PATH = PATH_ROOT / 'scripts' / 'setup.sqlite'
+    DB_PATH = PATH_ROOT.parents[1] / 'data' / 'sqlite' / 'database.db'
+    
+    TRANSIENT_PRAGMA = {"foreign_keys":"ON", "synchronous":"NORMAL", "busy_timeout":"5000", "cache_size":"-2000"}
     
     def __init__(self):
         self.db: Database = Database(self.DB_URL)
     
-    async def async_init(self):
-        await self.db.connect()
-        await self.db.execute(self.SETUP_SCRIPT_PATH.read_text())
-        
-    async def async_close(self):
-        await self.db.disconnect()
+    @classmethod
+    async def _run_setup(cls):
+        try:
+            async with aiosqlite.connect(cls.DB_PATH) as temp_conn:
+                await temp_conn.executescript(
+                    cls.SETUP_SCRIPT_PATH.read_text()
+                )
+        except Exception as e:
+            logger.critical(f'Something went wrong when initializing the DB schema: {e}')
+            exit(1) # exit as its systems critical
     
+    async def _apply_transient_pragma(self):
+        for k, v in self.TRANSIENT_PRAGMA.items():
+            try:
+                await self.db.execute(f'PRAGMA {k}={v};')
+            except Exception as e:
+                logger.warning(f'Something went wrong during pragma reapplication: {e}')
+    
+    async def async_init(self):
+        await self._run_setup()
+        await self.db.connect()
+        await self._apply_transient_pragma()
+
     # ---- AI Profile ----
     async def select_ai_profile(self):
         row = await self.db.fetch_one("SELECT * FROM AIProfile WHERE profile_id = 1 LIMIT 1")

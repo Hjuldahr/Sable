@@ -19,7 +19,7 @@ class Sable:
         self.ai_profile = None
 
     async def async_init(self):
-        await self.dbManager.async_init() 
+        await self.dbm.async_init() 
         self.ai_profile = await self.dbManager.select_ai_profile()   
 
     async def async_close(self):
