@@ -140,7 +140,7 @@ async def on_message(message: discord.Message):
     async with channel_data['lock']:
         async with message.channel.typing():
             try:
-                reply_text = await sable.reply(channel_data)
+                reply_text = await sable.reply(message.author, channel_data)
             except Exception as e:
                 logger.exception(f"Failed to generate a reply: {e}")
                 reply_text = "Sorry, I couldn't generate a reply."

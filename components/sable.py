@@ -1,4 +1,4 @@
-from discord import Message, Bot
+from discord import Member, Message, Bot, User
 
 from .db.database import DatabaseManager
 from .ai.llm import LargeLanguageModel
@@ -16,11 +16,11 @@ class Sable:
         self.vad = VAD(tag=VADTags.NEUTRAL)
         self.dbm = DatabaseManager()
         
-        self.persona = None
+        self.ai_profile = None
 
     async def async_init(self):
         await self.dbManager.async_init() 
-        self.persona = await self.dbManager.select_ai_profile()   
+        self.ai_profile = await self.dbManager.select_ai_profile()   
 
     async def async_close(self):
         self.llm.close()
@@ -38,7 +38,9 @@ class Sable:
         ]
         await self.dbm.insert_user_memories(values)
 
-    async def reply(self, messages: list[Message]) -> str:
+    async def reply(self, speaking_user: User | Member, messages: list[Message]) -> str:
+        user_profile = await self.dbm.select_user_profile(speaking_user.id)
+        
         message_vad = VADWords.score(messages[-1].clean_content)
         temp_vad = VAD(*self.vad)
         temp_vad.merge(message_vad, 0.2)
