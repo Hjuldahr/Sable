@@ -3,15 +3,20 @@ PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
 PRAGMA cache_size = -2000;
+
+-- AI Profile
 CREATE TABLE IF NOT EXISTS AIProfile (
     profile_id INTEGER PRIMARY KEY CHECK(profile_id = 1),
     discord_id INTEGER DEFAULT 1452493514050113781,
     user_name TEXT DEFAULT 'Sable',
     personality_traits TEXT DEFAULT '{}',   -- JSON blob
-    subject_history TEXT DEFAULT '[]',      
+    subject_history TEXT DEFAULT '[]',      -- JSON blob of long-term topics
     updated_on INTEGER DEFAULT (strftime('%s','now'))
 );
-INSERT INTO AIProfile(profile_id) VALUES(1) ON CONFLICT (profile_id) DO NOTHING;
+
+INSERT INTO AIProfile(profile_id) VALUES(1) ON CONFLICT (profile_id) DO NOTHING
+
+-- User Profile
 CREATE TABLE IF NOT EXISTS UserProfiles (
     discord_id INTEGER PRIMARY KEY,
     user_name TEXT,
@@ -21,13 +26,17 @@ CREATE TABLE IF NOT EXISTS UserProfiles (
     interaction_count INTEGER DEFAULT 0,
     last_interaction_at INTEGER DEFAULT (strftime('%s','now'))
 );
+
+-- AI Memories
 CREATE TABLE IF NOT EXISTS AIMemories (
     memory_id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry TEXT,
     category TEXT,           -- e.g., likes, dislikes, interests
     added_on INTEGER DEFAULT (strftime('%s','now'))
 );
-CREATE TABLE IF NOT EXISTS UserMemory (
+
+-- User Memories
+CREATE TABLE IF NOT EXISTS UserMemories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     entry TEXT,
